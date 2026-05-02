@@ -3,11 +3,13 @@
 // Sidebar 是客户端组件：未来要点击切换会话、打开设置 Dialog，
 // 这些都需要交互（onClick），server component 不能挂事件。
 
+import { useState } from "react"
 import { MessageSquarePlus, Settings, MessageCircle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { SettingsDialog } from "@/components/settings/SettingsDialog"
 import { cn } from "@/lib/utils"
 
 // 占位会话数据。Stage 4 接 IndexedDB 后，这里改成从 Zustand store 读取。
@@ -18,6 +20,8 @@ const placeholderConversations = [
 ]
 
 export function Sidebar() {
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       {/* 顶部：Logo + 新建对话 */}
@@ -66,12 +70,15 @@ export function Sidebar() {
           variant="ghost"
           size="sm"
           className="flex-1 justify-start gap-2"
+          onClick={() => setSettingsOpen(true)}
         >
           <Settings className="size-4" />
           设置
         </Button>
         <ThemeToggle />
       </div>
+
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </aside>
   )
 }
