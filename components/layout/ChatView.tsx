@@ -1,73 +1,62 @@
 "use client"
 
-// ChatView 也是客户端组件——发送按钮、textarea 输入都需要交互。
+// 主聊天区。
+// 组合三块：顶部状态条 + 中间消息列表（或欢迎页）+ 底部输入框。
+// 所有聊天状态都来自 useChatStream，这个 hook 把 fetch / abort / 错误处理都封装好了。
 
-import { useState } from "react"
-import { ArrowUp, Bot } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { Bot } from "lucide-react"
+
+import { ChatInput } from "@/components/chat/ChatInput"
+import { MessageList } from "@/components/chat/MessageList"
+import { useChatStream } from "@/lib/hooks/useChatStream"
+import { useSettings } from "@/lib/store/settingsStore"
 
 export function ChatView() {
-  // 当前输入框的内容。受控组件——React 状态作为唯一数据源。
-  const [input, setInput] = useState("")
+  const { messages, isStreaming, sendMessage, stop } = useChatStream()
+  // 只订阅需要的两个字段，避免无关字段（temperature 之类）变化触发重渲染。
+  const model = useSettings((s) => s.model)
+  const hasApiKey = useSettings((s) => Boolean(s.apiKey))
 
-  // Stage 1 还没接 LLM，发送按钮先打印到 console。
-  const handleSend = () => {
-    if (!input.trim()) return
-    console.log("[占位] 用户消息:", input)
-    setInput("")
-  }
+  const isEmpty = messages.length === 0
 
   return (
     <main className="flex h-full min-w-0 flex-1 flex-col">
-      {/* 顶部条：未来显示会话标题、模型名 */}
+      {/* 顶部条：当前模型 + API Key 配置提示 */}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4 text-sm">
         <Bot className="size-4 text-muted-foreground" />
-        <span className="text-muted-foreground">未配置模型</span>
+        <span className="font-medium">{model || "未配置模型"}</span>
+        {!hasApiKey && (
+          <span className="ml-auto text-xs text-muted-foreground">
+            尚未配置 API Key —— 请打开「设置」
+          </span>
+        )}
       </header>
 
-      {/* 消息列表（占位）*/}
-      <ScrollArea className="flex-1">
-        <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center gap-3 px-4 py-12 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            欢迎使用 CocoaChat
-          </h1>
-          <p className="max-w-md text-sm text-muted-foreground">
-            自带 API Key 的 AI 聊天客户端。聊天记录只存在你的浏览器里。
-            <br />
-            进入「设置」配置 API Key 后即可开始。
-          </p>
+      {/* 中间：消息列表或欢迎页（互斥） */}
+      {isEmpty ? (
+        <div className="flex flex-1 items-center justify-center">
+          <div className="mx-auto flex max-w-md flex-col items-center gap-3 px-4 text-center">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              欢迎使用 CocoaChat
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              自带 API Key 的 AI 聊天客户端。聊天记录只存在你的浏览器里。
+              <br />
+              {hasApiKey
+                ? "直接在下方开始提问吧。"
+                : "进入「设置」配置 API Key 后即可开始。"}
+            </p>
+          </div>
         </div>
-      </ScrollArea>
+      ) : (
+        <MessageList messages={messages} isStreaming={isStreaming} />
+      )}
 
-      {/* 底部输入区 */}
-      <div className="border-t border-border bg-background px-4 py-4">
-        <div className="mx-auto flex max-w-3xl items-end gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              // Enter 发送、Shift+Enter 换行——是聊天 UI 的事实标准。
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                handleSend()
-              }
-            }}
-            placeholder="给 CocoaChat 发消息…（Shift+Enter 换行）"
-            rows={1}
-            className="max-h-40 min-h-10 resize-none"
-          />
-          <Button
-            size="icon"
-            onClick={handleSend}
-            disabled={!input.trim()}
-            aria-label="发送"
-          >
-            <ArrowUp className="size-4" />
-          </Button>
-        </div>
-      </div>
+      <ChatInput
+        isStreaming={isStreaming}
+        onSend={sendMessage}
+        onStop={stop}
+      />
     </main>
   )
 }
