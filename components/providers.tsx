@@ -11,14 +11,21 @@ import { ThemeProvider } from "next-themes"
 
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
+import { useChatStore } from "@/lib/store/chatStore"
 import { useSettings } from "@/lib/store/settingsStore"
 
 // 单点触发 store 从 IndexedDB hydrate。
 // 必须在组件 mount 后跑（确保已经在客户端），且只跑一次（空依赖数组）。
 // 放在 Providers 这种全局唯一组件里，避免多组件重复 rehydrate 的竞态。
+//
+// 两个 store 用的机制不同：
+//   - useSettings：zustand persist 中间件，rehydrate() 是它内置 API
+//   - useChatStore：自己写的 hydrate action，从 repository 拉数据填进 state
+// 两者并行触发即可——它们写不同的字段，互不干扰。
 function HydrateStores() {
   useEffect(() => {
     void useSettings.persist.rehydrate()
+    void useChatStore.getState().hydrate()
   }, [])
   return null
 }
