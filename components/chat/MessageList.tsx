@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
+import { motion, useReducedMotion } from "framer-motion"
 
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { MessageItem } from "@/components/chat/MessageItem"
@@ -49,6 +50,31 @@ export function MessageList({
     prevFirstIdRef.current = firstId
   }, [messages.length, lastLen, firstId])
 
+  // ---- 入场动画判定 ----
+  //
+  // 目标：只让"刚 append 的最后一条"跑入场动画——
+  //   - 切会话 / 首次 hydrate：一次涨 N 条，全部 instant（避免 N 条瀑布）
+  //   - sendMessage 时新增 user → 1 条入场
+  //   - appendAssistantPlaceholder → 1 条入场（之后流式更新不再触发动画）
+  //
+  // 实现：用 React 官方推荐的"render 阶段条件 setState 派生 prev props"模式——
+  //   https://react.dev/reference/react/useState#storing-information-from-previous-renders
+  // 每次 messages.length 变化时同步两个 state：上次长度 + 是否"刚增 1"。
+  // React 在 render 期间检测到 setState 会丢弃当前输出立刻重渲染，第二次渲染
+  // 走稳定分支输出真正的 UI——比 useEffect+setState 少一次 commit，
+  // 也避开 React 19 的 react-hooks/refs（禁止 render 读 ref）和
+  // react-hooks/set-state-in-effect 两条 lint。
+  const [prevLen, setPrevLen] = useState(0)
+  const [justAppendedOne, setJustAppendedOne] = useState(false)
+  if (messages.length !== prevLen) {
+    setPrevLen(messages.length)
+    setJustAppendedOne(messages.length - prevLen === 1)
+  }
+
+  // 尊重操作系统/浏览器的"减少动画"偏好——比如部分用户晕动症会勾选这个。
+  // useReducedMotion 是 framer 提供的 hook，订阅 prefers-reduced-motion media query。
+  const reduceMotion = useReducedMotion()
+
   // 空状态：直接给 ChatView 处理欢迎页，这里只在有消息时渲染列表。
   // 但保留组件作为"消息列表"的单一入口，避免 ChatView 既管欢迎页又管列表。
   return (
@@ -62,16 +88,26 @@ export function MessageList({
           const isLast = i === messages.length - 1
           const showCursor =
             isStreaming && isLast && m.role === "assistant"
+          // 该不该跑入场动画：必须是"刚 append 的那一条"，且用户没设 reduce motion。
+          const animateIn = isLast && justAppendedOne && !reduceMotion
           return (
-            <MessageItem
+            <motion.div
               key={m.id}
-              message={m}
-              showCursor={showCursor}
-              isLastMessage={isLast}
-              isStreaming={isStreaming}
-              onEdit={onEdit}
-              onRegenerate={onRegenerate}
-            />
+              // initial=false 直接跳过入场——不是新增的就秒出现，避免切会话瀑布。
+              // initial 给对象时 framer 会从该状态过渡到 animate；false 表示"已经在 animate 状态"。
+              initial={animateIn ? { opacity: 0, y: 8 } : false}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+            >
+              <MessageItem
+                message={m}
+                showCursor={showCursor}
+                isLastMessage={isLast}
+                isStreaming={isStreaming}
+                onEdit={onEdit}
+                onRegenerate={onRegenerate}
+              />
+            </motion.div>
           )
         })}
         <div ref={bottomRef} aria-hidden />
