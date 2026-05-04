@@ -15,6 +15,7 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { MessageContent } from "@/components/chat/MessageContent"
 import { cn } from "@/lib/utils"
 import type { ChatMessage } from "@/lib/types/chat"
 
@@ -178,19 +179,28 @@ export function MessageItem({
                 : "rounded-tl-sm bg-muted text-foreground",
             )}
           >
-            {/* whitespace-pre-wrap：保留换行和多空格但不溢出。
-                Stage 6 会换成 react-markdown 渲染。 */}
-            <div className="whitespace-pre-wrap wrap-break-word">
-              {message.content}
-              {showCursor && (
-                <span
-                  className="ml-0.5 inline-block animate-pulse font-mono"
-                  aria-hidden
-                >
-                  ▍
-                </span>
-              )}
-            </div>
+            {/* user 消息：whitespace-pre-wrap 保留换行和多空格——
+                普通用户输入很少写 markdown，强行解析反而把 *foo* 变斜体会让人困惑。
+                assistant 消息：走 MessageContent（react-markdown + Shiki 高亮）。
+                光标贴在内容尾部——markdown 模式下放在外层不影响代码块渲染。 */}
+            {isUser ? (
+              <div className="whitespace-pre-wrap wrap-break-word">
+                {message.content}
+              </div>
+            ) : (
+              <div className="wrap-break-word">
+                <MessageContent content={message.content} />
+                {showCursor && (
+                  <span
+                    className="ml-0.5 inline-block animate-pulse font-mono"
+                    aria-hidden
+                  >
+                    ▍
+                  </span>
+                )}
+              </div>
+            )}
+            {/* user 也想要光标？目前只有 assistant 流式——user 不需要。 */}
           </div>
         )}
 

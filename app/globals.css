@@ -134,3 +134,19 @@
     @apply font-sans;
   }
 }
+
+/* Shiki dual-theme 切换。
+   Shiki 输出的 HTML 形如：
+     <pre class="shiki shiki-themes github-light github-dark"
+          style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8">
+       <span style="color:#D73A49;--shiki-dark:#F97583">const</span>
+   亮色直接用 inline color；暗色靠 .dark 选择器把 --shiki-dark 变量提为实际颜色。
+   !important 是必要的——要覆盖 Shiki 写在 inline style 上的亮色值。 */
+html.dark .shiki,
+html.dark .shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
+}
