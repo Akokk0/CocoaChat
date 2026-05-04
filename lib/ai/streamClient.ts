@@ -48,11 +48,16 @@ export async function* streamChat(
   // decoder 没开 stream 模式会直接抛 "decoding failed"，开了它会把不完整的尾巴留到下次 decode。
   const decoder = new TextDecoder("utf-8")
   let buffer = ""
+  // 区分"流自然结束"vs"调用方提前退出 / 抛错"——决定 finally 里要 cancel 还是只 releaseLock。
+  // 关键：对已经 done 的 reader 再 cancel() 会朝 server 发 RST，
+  // Next dev server 会把它当 ECONNRESET 冒成 uncaughtException——只是日志噪音，但很烦。
+  let exhausted = false
 
   try {
     while (true) {
       const { value, done } = await reader.read()
       if (done) {
+        exhausted = true
         // 流结束。decode() 不传参 = flush，把 decoder 内部缓冲清出来。
         buffer += decoder.decode()
         const tail = buffer.trim()
@@ -76,13 +81,16 @@ export async function* streamChat(
       }
     }
   } finally {
-    // 关键的清理点。
-    // 调用方提前 break / 抛异常 / abort 都会跑这里。
-    // reader.cancel() = releaseLock() + 把 cancel 信号推给上游 ReadableStream，
-    // 让连接真的关掉。比单纯 releaseLock() 更彻底。
-    await reader.cancel().catch(() => {
-      /* 已经关掉的 stream 再 cancel 会抛，吞掉即可 */
-    })
+    if (exhausted) {
+      // 已经读到 done——stream 自然关闭。只解锁，不 cancel——避免对已关连接再发关闭信号。
+      reader.releaseLock()
+    } else {
+      // 调用方 break / 抛异常 / abort 进入这里。主动 cancel 把 cancel 信号推给上游，
+      // 让 fetch 真的断开（进而 server 的 request.signal.aborted=true）。
+      await reader.cancel().catch(() => {
+        /* 已经关掉的 stream 再 cancel 会抛，吞掉即可 */
+      })
+    }
   }
 }
 

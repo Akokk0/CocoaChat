@@ -18,10 +18,13 @@ import type {
   StreamEvent,
 } from "@/lib/types/chat"
 
-// Edge Runtime：冷启动毫秒级、低延迟、跑在离用户最近的 PoP。
-// 流式场景对首字节延迟（TTFB）非常敏感，Edge 比 Node Runtime 快一档。
-// 代价：不能用 Node 原生模块（fs / net 等），但我们用不上。
-export const runtime = "edge"
+// 运行时：Node.js（Next 16 路由处理器默认）。
+// 之前用过 Edge Runtime（冷启动更短、跑在离用户近的 PoP），但 Next 16 的
+// dev 模式 Edge polyfill + OpenAI SDK 长连接 fetch 在流式结束后会冒
+// `Error: aborted / ECONNRESET` 的 uncaughtException——dev 噪音很烦。
+// Node Runtime 同样支持流式（这条路由仍然走 ReadableStream + chunked transfer），
+// dev 体验干净；prod 部署到 Vercel 是 Node Serverless Function，TTFB 仍然很快。
+// 想换回来就把下面这行注释掉换成 `export const runtime = "edge"`，代码本身两端都兼容。
 
 // 强制每次都跑、不要被任何缓存层固化。
 // Next 16 默认 POST 不缓存，但流式场景里显式声明更稳妥。
@@ -30,7 +33,8 @@ export const dynamic = "force-dynamic"
 // ---- NDJSON 编码器 ----
 
 // 一行一个 JSON 对象，行尾 "\n"。
-// 用 TextEncoder（Web 原生）而不是 Buffer.from（Node 限定）——Edge Runtime 兼容。
+// TextEncoder 是 Web 标准，Node / Edge 两端都有；用它而不是 Buffer.from
+// 让这段代码在 runtime 切换时不用动。
 const encoder = new TextEncoder()
 
 function encodeEvent(event: StreamEvent): Uint8Array {
@@ -74,11 +78,18 @@ export async function POST(request: Request) {
   // 我们在里面跑 for-await 拉上游 chunk，每拿到一段就 enqueue 给浏览器。
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      // 关键：自己持一个 AbortController 给 SDK，而不是直接把 request.signal 传过去。
+      // 中间这一层让我们在"流自然结束"的时刻能"切断"client signal 对 SDK 的影响——
+      // 否则 stream 已 close、client 后续断开连接（keep-alive 池清理）会再次触发
+      // request.signal.abort，传到 SDK 的已完成 fetch 上，被 undici 翻成
+      // 'aborted' / ECONNRESET，由于 SDK 内部不再 await 那个 fetch，错误冒到
+      // uncaughtException——这是 Next dev edge polyfill + Node socket 时序的边界情况。
+      const upstreamCtrl = new AbortController()
+      const forwardAbort = () => upstreamCtrl.abort()
+      // 用户主动 stop / 关页面：把 abort 转发给 SDK，让上游连接断、不再扣 token。
+      request.signal.addEventListener("abort", forwardAbort, { once: true })
+
       try {
-        // 关键：把 request.signal 透传给上游 fetch。
-        // 浏览器 abort → 我们的 connection 关闭 → request.signal.aborted 变 true
-        // → openai SDK 的 fetch 收到 signal abort → 上游连接关闭、不再扣 token。
-        // 没这一步的话，用户点了"停止"但服务端还在闷头读完整个回答，浪费配额。
         const upstream = await client.chat.completions.create(
           {
             model: body.model,
@@ -89,7 +100,7 @@ export async function POST(request: Request) {
             }),
             ...(body.maxTokens != null && { max_tokens: body.maxTokens }),
           },
-          { signal: request.signal },
+          { signal: upstreamCtrl.signal },
         )
 
         // 4) 转发 chunk。
@@ -143,11 +154,18 @@ export async function POST(request: Request) {
         } catch {
           // 流可能已经被关，忽略
         }
+      } finally {
+        // 不管正常完成还是异常退出，都断开 listener。
+        // 流已经收尾，再让 client signal 触发 upstreamCtrl.abort 没意义——
+        // SDK 的 fetch 此时若还在 keep-alive 池里持有 socket，被这个迟到的 abort
+        // 戳一下就会冒 ECONNRESET。卸下 listener 等于明确告诉 runtime
+        // "我已不关心 client 后续是否断开"。
+        request.signal.removeEventListener("abort", forwardAbort)
       }
     },
 
     // 浏览器 abort 时 ReadableStream 会触发 cancel。
-    // 我们这里没什么要清理的——request.signal 已经把 cancellation 传给了上游。
+    // 我们这里没什么要清理的——request.signal 监听器在 start() 的 finally 里负责。
     cancel() {},
   })
 

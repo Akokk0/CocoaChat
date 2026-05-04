@@ -4,6 +4,8 @@ import {
   appendMessage,
   createConversation as repoCreateConversation,
   deleteConversation as repoDeleteConversation,
+  deleteMessage as repoDeleteMessage,
+  deleteMessages as repoDeleteMessages,
   deriveTitle,
   listConversations,
   listMessagesByConversation,
@@ -53,6 +55,18 @@ interface ChatActions {
   removeLastAssistantIfEmpty: (id: string) => void
   // 清当前会话内存（不删 IDB）——切会话/重置 UI 用。
   clearCurrentMessages: () => void
+
+  // ---- Stage 5：编辑 / 重发 ----
+  // 删一条消息（IDB + 内存）。重发场景下用来删被替代的旧 assistant。
+  removeMessage: (id: string) => Promise<void>
+  // 截断：从 messageId（含本身）到最后所有消息全删。编辑用户消息后重发用。
+  // 为什么以 id 切而不是 createdAt 阈值：避免极端情况下同毫秒消息被错删。
+  truncateFrom: (messageId: string) => Promise<void>
+  // 改会话级 system prompt（覆盖全局默认）。空字符串视为"沿用全局"。
+  setConversationSystemPrompt: (
+    conversationId: string,
+    prompt: string,
+  ) => Promise<void>
 }
 
 type Store = ChatState & ChatActions
@@ -222,6 +236,44 @@ export const useChatStore = create<Store>()((set, get) => ({
 
   clearCurrentMessages() {
     set({ messages: [] })
+  },
+
+  // ---- Stage 5 ----
+
+  async removeMessage(id) {
+    // 先内存：用户立刻看到消息消失，无网络/IDB 等待感。
+    set((s) => ({
+      messages: s.messages.filter((m) => m.id !== id),
+    }))
+    // 后 IDB：失败也不回滚 UI——这个 action 只在"立即重发/重写"前调，
+    // 用户接下来要看到的就是新内容；旧内容残留在 IDB 不会被读出来。
+    // 真正的容灾交给上层（hook）的整体错误处理：流式失败时不会调到这步。
+    await repoDeleteMessage(id)
+  },
+
+  async truncateFrom(messageId) {
+    // 1) 在内存里定位起点。找不到就当无事发生——可能是别的 tab 改了 store 之类。
+    const state = get()
+    const idx = state.messages.findIndex((m) => m.id === messageId)
+    if (idx < 0) return
+    // 2) 拿到要删的全部 id（含起点本身），按 ids 精确删，不依赖 createdAt 单调。
+    const toDelete = state.messages.slice(idx).map((m) => m.id)
+    set({ messages: state.messages.slice(0, idx) })
+    await repoDeleteMessages(toDelete)
+  },
+
+  async setConversationSystemPrompt(conversationId, prompt) {
+    // 空串/全空白 = 解除覆盖，落库存 undefined（让 partialize/读取时区分"未设置"）。
+    const trimmed = prompt.trim()
+    const updated = await repoUpdateConversation(conversationId, {
+      systemPrompt: trimmed || undefined,
+    })
+    if (!updated) return
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === conversationId ? updated : c,
+      ),
+    }))
   },
 }))
 

@@ -156,20 +156,20 @@ export async function putMessage(
   await db.put("messages", record)
 }
 
-// 删除指定消息之后（含它本身）所有 createdAt >= 该时刻的消息——Stage 5 编辑/重发时用。
-// 这里先放工具函数，Stage 4 还不调。
-export async function deleteMessagesFrom(
-  conversationId: string,
-  fromCreatedAt: number,
-): Promise<void> {
+// 单条删除——重发时删掉旧 assistant 占位/失败消息用。
+export async function deleteMessage(id: string): Promise<void> {
+  const db = await getDB()
+  await db.delete("messages", id)
+}
+
+// 批量按 id 删除——编辑/重发"截断 message 之后所有"用。
+// 比按 createdAt 阈值删更精确：上层按内存 messages 数组顺序拿到要删的 id 即可，
+// 不依赖时间戳单调（极端情况：同毫秒多条消息就会出错）。
+export async function deleteMessages(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
   const db = await getDB()
   const tx = db.transaction("messages", "readwrite")
-  const all = await tx.store.index("byConversation").getAll(conversationId)
-  await Promise.all(
-    all
-      .filter((m) => m.createdAt >= fromCreatedAt)
-      .map((m) => tx.store.delete(m.id)),
-  )
+  await Promise.all(ids.map((id) => tx.store.delete(id)))
   await tx.done
 }
 

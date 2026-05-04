@@ -2,25 +2,41 @@
 
 // 主聊天区。
 // 数据源分两块：
-//   - chatStore：messages、currentId、isHydrated
-//   - useChatStream：isStreaming + sendMessage + stop（流式编排）
+//   - chatStore：messages、currentId、isHydrated、当前会话的 systemPrompt（用于按钮高亮）
+//   - useChatStream：isStreaming + sendMessage + stop + regenerate + editAndResend
 // 这种"状态在 store / 行为在 hook"的拆分让组件本身只管渲染。
 
-import { Bot } from "lucide-react"
+import { useState } from "react"
+import { Bot, FileText } from "lucide-react"
 
 import { ChatInput } from "@/components/chat/ChatInput"
+import { ConversationSystemPromptDialog } from "@/components/chat/ConversationSystemPromptDialog"
 import { MessageList } from "@/components/chat/MessageList"
+import { Button } from "@/components/ui/button"
 import { useChatStream } from "@/lib/hooks/useChatStream"
 import { useChatStore } from "@/lib/store/chatStore"
 import { useSettings } from "@/lib/store/settingsStore"
+import { cn } from "@/lib/utils"
 
 export function ChatView() {
-  const { isStreaming, sendMessage, stop } = useChatStream()
+  const { isStreaming, sendMessage, stop, regenerate, editAndResend } =
+    useChatStream()
+
+  const [sysPromptOpen, setSysPromptOpen] = useState(false)
 
   // 字段级订阅。任何一个字段变化，本组件最少重渲染。
   const messages = useChatStore((s) => s.messages)
   const currentId = useChatStore((s) => s.currentId)
   const isHydrated = useChatStore((s) => s.isHydrated)
+  // 当前会话是否设置了"会话级 system prompt"——按钮高亮用，直观告诉用户"这个会话有自己的 prompt"。
+  const hasConvSystemPrompt = useChatStore((s) =>
+    Boolean(
+      s.currentId &&
+        s.conversations
+          .find((c) => c.id === s.currentId)
+          ?.systemPrompt?.trim(),
+    ),
+  )
 
   const model = useSettings((s) => s.model)
   const hasApiKey = useSettings((s) => Boolean(s.apiKey))
@@ -37,16 +53,48 @@ export function ChatView() {
     // overflow-hidden 兜底：万一某个内层 flex 配合没设置好（比如未来加了组件忘记 min-h-0），
     // 至少不会把整页撑出滚动条——本组件内部超出部分被裁掉，肉眼可见就能立刻发现。
     <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
-      {/* 顶部条：当前模型 + API Key 配置提示 */}
+      {/* 顶部条：当前模型 + API Key 配置提示 + 会话系统提示入口 */}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4 text-sm">
         <Bot className="size-4 text-muted-foreground" />
         <span className="font-medium">{model || "未配置模型"}</span>
-        {!hasApiKey && (
-          <span className="ml-auto text-xs text-muted-foreground">
-            尚未配置 API Key —— 请打开「设置」
-          </span>
-        )}
+
+        <div className="ml-auto flex items-center gap-2">
+          {!hasApiKey && (
+            <span className="text-xs text-muted-foreground">
+              尚未配置 API Key —— 请打开「设置」
+            </span>
+          )}
+          {/* 会话级 system prompt 入口：仅当选中了会话时显示。
+              已设置过的会话用 primary 色提示——和 muted 形成对比，一眼能区分。 */}
+          {currentId && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "size-7",
+                hasConvSystemPrompt
+                  ? "text-primary"
+                  : "text-muted-foreground",
+              )}
+              onClick={() => setSysPromptOpen(true)}
+              aria-label="会话系统提示"
+              title={
+                hasConvSystemPrompt
+                  ? "已设置会话系统提示"
+                  : "设置会话系统提示"
+              }
+            >
+              <FileText className="size-4" />
+            </Button>
+          )}
+        </div>
       </header>
+
+      <ConversationSystemPromptDialog
+        open={sysPromptOpen}
+        onOpenChange={setSysPromptOpen}
+        conversationId={currentId}
+      />
 
       {/* 中间：消息列表或欢迎页（互斥） */}
       {showWelcome ? (
@@ -67,7 +115,12 @@ export function ChatView() {
           </div>
         </div>
       ) : (
-        <MessageList messages={messages} isStreaming={isStreaming} />
+        <MessageList
+          messages={messages}
+          isStreaming={isStreaming}
+          onEdit={editAndResend}
+          onRegenerate={regenerate}
+        />
       )}
 
       <ChatInput

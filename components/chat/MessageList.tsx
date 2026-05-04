@@ -9,9 +9,18 @@ import type { ChatMessage } from "@/lib/types/chat"
 interface Props {
   messages: ChatMessage[]
   isStreaming: boolean
+  // Stage 5 加：把"编辑某条 user 消息"和"重发最后 assistant"的回调透传给每条 item。
+  // 列表组件本身不知道两件事的语义，只负责把 item 装进容器并接线。
+  onEdit?: (messageId: string, newContent: string) => void
+  onRegenerate?: () => void
 }
 
-export function MessageList({ messages, isStreaming }: Props) {
+export function MessageList({
+  messages,
+  isStreaming,
+  onEdit,
+  onRegenerate,
+}: Props) {
   // 滚动到底锚点：在列表尾巴放一个空 div，每次有新内容就把它 scrollIntoView。
   // 比手动算 scrollTop = scrollHeight 更稳，浏览器自己处理浮点边界。
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -54,7 +63,15 @@ export function MessageList({ messages, isStreaming }: Props) {
           const showCursor =
             isStreaming && isLast && m.role === "assistant"
           return (
-            <MessageItem key={m.id} message={m} showCursor={showCursor} />
+            <MessageItem
+              key={m.id}
+              message={m}
+              showCursor={showCursor}
+              isLastMessage={isLast}
+              isStreaming={isStreaming}
+              onEdit={onEdit}
+              onRegenerate={onRegenerate}
+            />
           )
         })}
         <div ref={bottomRef} aria-hidden />
