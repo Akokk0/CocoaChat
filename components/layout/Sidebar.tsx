@@ -37,7 +37,13 @@ function formatRelative(ts: number): string {
   return `${mm}-${dd}`
 }
 
-export function Sidebar() {
+interface Props {
+  // 移动端 drawer 模式下传"关 drawer"——用户点完会话/新建会自动关。
+  // 桌面端不传，所有 callback 默认是 no-op。
+  onItemClick?: () => void
+}
+
+export function Sidebar({ onItemClick }: Props = {}) {
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   // 订阅按字段拆分：每个 useChatStore 调用只关心一个值，
@@ -55,15 +61,22 @@ export function Sidebar() {
   async function handleNew() {
     try {
       await createConversation()
+      onItemClick?.()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "创建会话失败")
     }
+  }
+
+  async function handleSelect(id: string) {
+    await selectConversation(id)
+    onItemClick?.()
   }
 
   async function handleDelete(id: string, title: string) {
     if (!window.confirm(`删除"${title}"？该会话的所有消息会一起删除。`)) return
     try {
       await deleteConversation(id)
+      // 删除后通常用户继续操作（可能切到别的会话）——保持 drawer 开着，不主动关。
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "删除失败")
     }
@@ -82,8 +95,15 @@ export function Sidebar() {
     }
   }
 
+  function handleOpenSettings() {
+    setSettingsOpen(true)
+    // 设置 dialog 打开后 drawer 也关掉——免得两层蒙层叠在一起。
+    onItemClick?.()
+  }
+
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+    // 宽度由外层容器控制（桌面 w-64，drawer w-72）；这里 w-full 跟随父级。
+    <aside className="flex h-full w-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       {/* 顶部：Logo + 新建对话 */}
       <div className="flex flex-col gap-3 p-3">
         <div className="flex items-center gap-2 px-2 py-1">
@@ -134,7 +154,7 @@ export function Sidebar() {
                   {/* 整行点击切换会话——button 包整行让点击区域大 */}
                   <button
                     type="button"
-                    onClick={() => selectConversation(c.id)}
+                    onClick={() => handleSelect(c.id)}
                     className="flex flex-col gap-0.5 text-left"
                   >
                     <div className="flex items-center gap-2 truncate pr-12">
@@ -188,7 +208,7 @@ export function Sidebar() {
           variant="ghost"
           size="sm"
           className="flex-1 justify-start gap-2"
-          onClick={() => setSettingsOpen(true)}
+          onClick={handleOpenSettings}
         >
           <Settings className="size-4" />
           设置

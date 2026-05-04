@@ -7,7 +7,7 @@
 // 这种"状态在 store / 行为在 hook"的拆分让组件本身只管渲染。
 
 import { useState } from "react"
-import { Bot, FileText } from "lucide-react"
+import { Bot, FileText, Menu } from "lucide-react"
 
 import { ChatInput } from "@/components/chat/ChatInput"
 import { ConversationSystemPromptDialog } from "@/components/chat/ConversationSystemPromptDialog"
@@ -18,7 +18,13 @@ import { useChatStore } from "@/lib/store/chatStore"
 import { useSettings } from "@/lib/store/settingsStore"
 import { cn } from "@/lib/utils"
 
-export function ChatView() {
+interface Props {
+  // 移动端汉堡菜单点击——AppShell 用它打开 drawer。
+  // 桌面端 drawer 永不打开，所以这个 callback 在桌面是 dead code（按钮也 hidden）。
+  onMenuClick?: () => void
+}
+
+export function ChatView({ onMenuClick }: Props = {}) {
   const { isStreaming, sendMessage, stop, regenerate, editAndResend } =
     useChatStream()
 
@@ -53,8 +59,19 @@ export function ChatView() {
     // overflow-hidden 兜底：万一某个内层 flex 配合没设置好（比如未来加了组件忘记 min-h-0），
     // 至少不会把整页撑出滚动条——本组件内部超出部分被裁掉，肉眼可见就能立刻发现。
     <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
-      {/* 顶部条：当前模型 + API Key 配置提示 + 会话系统提示入口 */}
+      {/* 顶部条：（移动端）汉堡菜单 + 当前模型 + API Key 配置提示 + 会话系统提示入口 */}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4 text-sm">
+        {/* 汉堡菜单：仅 < md 显示。md+ 桌面端有常驻 sidebar，不需要它。 */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 text-muted-foreground md:hidden"
+          onClick={onMenuClick}
+          aria-label="打开会话列表"
+        >
+          <Menu className="size-4" />
+        </Button>
+
         <Bot className="size-4 text-muted-foreground" />
         <span className="font-medium">{model || "未配置模型"}</span>
 
