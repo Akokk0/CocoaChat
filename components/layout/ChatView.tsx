@@ -59,52 +59,66 @@ export function ChatView({ onMenuClick }: Props = {}) {
     // overflow-hidden 兜底：万一某个内层 flex 配合没设置好（比如未来加了组件忘记 min-h-0），
     // 至少不会把整页撑出滚动条——本组件内部超出部分被裁掉，肉眼可见就能立刻发现。
     <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
-      {/* 顶部条：（移动端）汉堡菜单 + 当前模型 + API Key 配置提示 + 会话系统提示入口 */}
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4 text-sm">
+      {/* 顶部条：（移动端）汉堡菜单 + 当前模型 + API Key 配置提示 + 会话系统提示入口
+          移动端布局关键：所有 inline 元素必须 shrink-0，可压缩的（model 名）用 flex-1 + min-w-0 + truncate
+          才能在 320px 视口里不溢出。flex 子项默认 min-width:auto = 内容宽度，不主动 min-w-0 它会撑爆父级。 */}
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3 text-sm">
         {/* 汉堡菜单：仅 < md 显示。md+ 桌面端有常驻 sidebar，不需要它。 */}
         <Button
           variant="ghost"
           size="icon"
-          className="size-7 text-muted-foreground md:hidden"
+          className="size-7 shrink-0 text-muted-foreground md:hidden"
           onClick={onMenuClick}
           aria-label="打开会话列表"
         >
           <Menu className="size-4" />
         </Button>
 
-        <Bot className="size-4 text-muted-foreground" />
-        <span className="font-medium">{model || "未配置模型"}</span>
+        <Bot className="size-4 shrink-0 text-muted-foreground" />
+        {/* model 名占据剩余空间，min-w-0 + truncate 让它可压缩——
+            窄屏太长会出 "..."，比强行撑宽好得多 */}
+        <span className="min-w-0 flex-1 truncate font-medium">
+          {model || "未配置模型"}
+        </span>
 
-        <div className="ml-auto flex items-center gap-2">
-          {!hasApiKey && (
-            <span className="text-xs text-muted-foreground">
+        {!hasApiKey && (
+          // 警告：sm+ 文字版本；窄屏只显示一个红点提示（无文字、不撑宽）。
+          // 用户在窄屏时打开 drawer 找设置按钮——欢迎页那段 hint 也会引导。
+          <>
+            <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
               尚未配置 API Key —— 请打开「设置」
             </span>
-          )}
-          {/* 会话级 system prompt 入口：仅当选中了会话时显示。
-              已设置过的会话用 primary 色提示——和 muted 形成对比，一眼能区分。 */}
-          {currentId && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn(
-                "size-7",
-                hasConvSystemPrompt
-                  ? "text-primary"
-                  : "text-muted-foreground",
-              )}
-              onClick={() => setSysPromptOpen(true)}
-              aria-label="会话系统提示"
-              title={
-                hasConvSystemPrompt
-                  ? "已设置会话系统提示"
-                  : "设置会话系统提示"
-              }
-            >
-              <FileText className="size-4" />
-            </Button>
-          )}
-        </div>
+            <span
+              className="size-2 shrink-0 rounded-full bg-destructive sm:hidden"
+              aria-label="尚未配置 API Key"
+              title="尚未配置 API Key"
+            />
+          </>
+        )}
+
+        {/* 会话级 system prompt 入口：仅当选中了会话时显示。
+            已设置过的会话用 primary 色提示——和 muted 形成对比，一眼能区分。 */}
+        {currentId && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn(
+              "size-7 shrink-0",
+              hasConvSystemPrompt
+                ? "text-primary"
+                : "text-muted-foreground",
+            )}
+            onClick={() => setSysPromptOpen(true)}
+            aria-label="会话系统提示"
+            title={
+              hasConvSystemPrompt
+                ? "已设置会话系统提示"
+                : "设置会话系统提示"
+            }
+          >
+            <FileText className="size-4" />
+          </Button>
+        )}
       </header>
 
       <ConversationSystemPromptDialog

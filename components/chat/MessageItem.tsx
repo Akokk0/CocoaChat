@@ -121,10 +121,14 @@ export function MessageItem({
 
       {/* 气泡 + 工具条堆叠在同一列。
           flex flex-col 让工具条贴在气泡正下方。
-          items-end / items-start 控制工具条相对气泡左右对齐。 */}
+          items-end / items-start 控制工具条相对气泡左右对齐。
+          min-w-0 至关重要：作为外层 flex-row 的子项，默认 min-width:auto = min-content，
+          含长代码行 (pre 不可换行) 时会被撑到内容宽度——max-w 形同虚设。
+          min-w-0 覆盖默认值，让这个列容器可以收缩到 0~max-w 之间，
+          气泡内的 pre 才能真正触发自己的 overflow-x-auto 内部滚动。 */}
       <div
         className={cn(
-          "flex max-w-[min(80%,640px)] flex-col gap-1",
+          "flex min-w-0 max-w-[min(80%,640px)] flex-col gap-1",
           isUser ? "items-end" : "items-start",
         )}
       >
@@ -173,7 +177,10 @@ export function MessageItem({
         ) : (
           <div
             className={cn(
-              "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
+              // min-w-0 + max-w-full 双保险：列容器 items-end/start 让气泡按内容宽度收缩，
+              // 但 pre 的 min-content 仍可能撑大它——max-w-full 锁住父级宽度，
+              // min-w-0 允许子元素的 overflow-x-auto 启动滚动。
+              "min-w-0 max-w-full rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
               isUser
                 ? "rounded-tr-sm bg-primary text-primary-foreground"
                 : "rounded-tl-sm bg-muted text-foreground",
