@@ -156,6 +156,26 @@ export async function putMessage(
   await db.put("messages", record)
 }
 
+// 单事务：写消息 + 顶起会话 updatedAt。
+// 流式 assistant 落盘时用——避免 putMessage / touchConversation 两次独立事务，
+// 中途失败会出现"消息已落盘但 conversation 时间戳未更新"的不一致。
+export async function putMessageAndTouch(
+  conversationId: string,
+  message: ChatMessage,
+): Promise<void> {
+  const record: MessageRecord = { ...message, conversationId }
+  const db = await getDB()
+  const tx = db.transaction(["messages", "conversations"], "readwrite")
+  await tx.objectStore("messages").put(record)
+  const conv = await tx.objectStore("conversations").get(conversationId)
+  if (conv) {
+    await tx
+      .objectStore("conversations")
+      .put({ ...conv, updatedAt: message.createdAt })
+  }
+  await tx.done
+}
+
 // 单条删除——重发时删掉旧 assistant 占位/失败消息用。
 export async function deleteMessage(id: string): Promise<void> {
   const db = await getDB()

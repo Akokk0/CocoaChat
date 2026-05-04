@@ -9,8 +9,7 @@ import {
   deriveTitle,
   listConversations,
   listMessagesByConversation,
-  putMessage,
-  touchConversation,
+  putMessageAndTouch,
   updateConversation as repoUpdateConversation,
   type ConversationRecord,
 } from "@/lib/storage/repository"
@@ -105,27 +104,67 @@ function withMessages(
   }
 }
 
+// 工具：会话列表按 id 去重合并，按 updatedAt 降序。
+// hydrate 期间用户可能已新建会话——既不能丢内存中的，也要把 IDB 里的并进来。
+function mergeConversations(
+  inMemory: ConversationRecord[],
+  fromDb: ConversationRecord[],
+): ConversationRecord[] {
+  const map = new Map<string, ConversationRecord>()
+  for (const c of fromDb) map.set(c.id, c)
+  // 内存版本优先——它包含 hydrate 期间用户操作的最新 updatedAt / title。
+  for (const c of inMemory) map.set(c.id, c)
+  return [...map.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
 // ---- Store ----
 
 export const useChatStore = create<Store>()((set, get) => ({
   ...INITIAL,
 
   // 应用启动时调一次。读会话列表，若有则自动选中最新那条并加载它的消息。
+  // 关键：set 用函数式合并而不是替换。hydrate 期间走两次 await IDB——
+  // 这中间用户可能 createConversation / 触发 streaming 占位 / 改 currentId，
+  // 直接 set 整对象会 stomp 这些"hydrate 进行中"产生的内存状态。
   async hydrate() {
     if (get().isHydrated) return
     const conversations = await listConversations()
     if (conversations.length === 0) {
-      set({ conversations, isHydrated: true })
+      set((s) => ({
+        // 保留 hydrate 期间用户已新建的本地会话——repository 那边已经写盘，
+        // 下次 hydrate 也会读出来；这里只是把内存补齐。
+        conversations: mergeConversations(s.conversations, conversations),
+        isHydrated: true,
+      }))
       return
     }
     const first = conversations[0]
     const messages = await listMessagesByConversation(first.id)
-    set({
-      conversations,
-      currentId: first.id,
-      messagesByConv: { [first.id]: messages },
-      hydratedConvIds: new Set([first.id]),
-      isHydrated: true,
+    set((s) => {
+      // 合并会话列表：以 id 去重，hydrate 读的 + 内存中已有的，最后按 updatedAt 降序。
+      const merged = mergeConversations(s.conversations, conversations)
+      // 如果 currentId 已经被用户选成别的（hydrate 期间触发），尊重用户选择。
+      const currentId = s.currentId ?? first.id
+      // messages：hydrate 读的覆盖到对应 conv，但若该 conv 内存里已有 streaming 占位，保留它们。
+      const messagesByConv = { ...s.messagesByConv }
+      const existing = messagesByConv[first.id]
+      if (existing && existing.length > 0) {
+        // 内存有内容（可能含 streaming 占位）——按 id 去重 merge。
+        const seen = new Set(messages.map((m) => m.id))
+        messagesByConv[first.id] = [
+          ...messages,
+          ...existing.filter((m) => !seen.has(m.id)),
+        ]
+      } else {
+        messagesByConv[first.id] = messages
+      }
+      return {
+        conversations: merged,
+        currentId,
+        messagesByConv,
+        hydratedConvIds: new Set([...s.hydratedConvIds, first.id]),
+        isHydrated: true,
+      }
     })
   },
 
@@ -149,7 +188,8 @@ export const useChatStore = create<Store>()((set, get) => ({
     if (!get().hydratedConvIds.has(id)) {
       const messages = await listMessagesByConversation(id)
       // 二次检查：在我们读 IDB 期间，可能 streaming 已经往这个 conv 写了 placeholder。
-      // 不要直接覆盖——把 IDB 读出的历史和已存在的内存合并（按 id 去重 + 按 createdAt 排）。
+      // 不要直接覆盖——按 id 去重合并：IDB 读出的历史在前，内存里独有的（streaming 占位）补在末尾。
+      // streaming 占位的 createdAt 也是 Date.now()，自然就是末尾时间——不需要再排序。
       set((s) => {
         const existing = s.messagesByConv[id]
         if (!existing || existing.length === 0) {
@@ -158,8 +198,6 @@ export const useChatStore = create<Store>()((set, get) => ({
             hydratedConvIds: new Set([...s.hydratedConvIds, id]),
           }
         }
-        // existing 里可能有 streaming 占位，IDB 读不出来——保留它们。
-        // 简单 merge：以 id 去重，IDB 的优先（更权威），internal 的补在末尾。
         const seen = new Set(messages.map((m) => m.id))
         const tail = existing.filter((m) => !seen.has(m.id))
         const merged = [...messages, ...tail]
@@ -295,9 +333,9 @@ export const useChatStore = create<Store>()((set, get) => ({
     if (!messages) return // 会话已被删
     const message = messages.find((m) => m.id === id)
     if (!message) return // 用户可能已经删掉这条——容忍
-    await putMessage(conversationId, message)
-    // 顺手把会话 updatedAt 顶起来，确保流式结束后 Sidebar 排序也刷新。
-    await touchConversation(conversationId)
+    // 单事务：消息 + 会话 updatedAt 一起写。之前分两次 (putMessage + touchConversation)
+    // 中间失败会出现"消息落盘了但会话时间戳没更新"的不一致——Sidebar 排序也会错位。
+    await putMessageAndTouch(conversationId, message)
     set((s) => ({
       conversations: s.conversations
         .map((c) =>
@@ -320,6 +358,9 @@ export const useChatStore = create<Store>()((set, get) => ({
   // ---- Stage 5：编辑 / 重发 ----
 
   async removeMessage(conversationId, id) {
+    // 先 IDB 后内存：IDB 失败时我们能看到错误（让 caller catch / toast），
+    // 而不是出现"内存里没了，下次 hydrate 又冒出来"的幽灵。
+    await repoDeleteMessage(id)
     set((s) => ({
       ...withMessages(
         s,
@@ -327,7 +368,6 @@ export const useChatStore = create<Store>()((set, get) => ({
         (s.messagesByConv[conversationId] ?? []).filter((m) => m.id !== id),
       ),
     }))
-    await repoDeleteMessage(id)
   },
 
   async truncateFrom(conversationId, messageId) {
@@ -336,10 +376,11 @@ export const useChatStore = create<Store>()((set, get) => ({
     const idx = messages.findIndex((m) => m.id === messageId)
     if (idx < 0) return
     const toDelete = messages.slice(idx).map((m) => m.id)
+    // 同上：先持久化删除，成功了再更新内存——避免内存与 IDB 分叉。
+    await repoDeleteMessages(toDelete)
     set((s) => ({
       ...withMessages(s, conversationId, messages.slice(0, idx)),
     }))
-    await repoDeleteMessages(toDelete)
   },
 
   async setConversationSystemPrompt(conversationId, prompt) {
