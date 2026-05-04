@@ -15,9 +15,33 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 })
 
+// 简历项目分享出去（推到群、发推、收进 Notion）时会展示 OG/Twitter 卡片。
+// 不补这一块，链接预览只有一个光秃秃的 URL；补上之后会显示标题 + 描述 +（可选）图片。
+// applicationName / authors / themeColor 这些次要字段也顺手填上，让被搜到时更完整。
 export const metadata: Metadata = {
-  title: "CocoaChat",
-  description: "BYOK AI chat — your keys, your data, all on-device",
+  title: {
+    default: "CocoaChat",
+    template: "%s · CocoaChat",
+  },
+  description:
+    "Bring your own key 的 AI 聊天客户端。会话、API Key、设置全部存在浏览器本地——服务端只做无状态透传。",
+  applicationName: "CocoaChat",
+  authors: [{ name: "Akokko" }],
+  keywords: ["AI chat", "BYOK", "OpenAI", "DeepSeek", "Next.js", "IndexedDB"],
+  openGraph: {
+    type: "website",
+    title: "CocoaChat",
+    description:
+      "Bring your own key 的 AI 聊天客户端。会话、API Key、设置全部存在浏览器本地。",
+    siteName: "CocoaChat",
+    locale: "zh_CN",
+  },
+  twitter: {
+    card: "summary",
+    title: "CocoaChat",
+    description:
+      "Bring your own key 的 AI 聊天客户端，数据完全在浏览器本地。",
+  },
 }
 
 export default function RootLayout({

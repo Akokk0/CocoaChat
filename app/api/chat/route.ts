@@ -65,6 +65,24 @@ export async function POST(request: Request) {
   if (!body.model?.trim()) {
     return Response.json({ error: "Missing model" }, { status: 400 })
   }
+  // 逐条校验 messages 项的 role/content。非法值如果透传到 SDK 才报错，
+  // 错误信息会被 SDK 包装得很模糊；这里早查能给前端清晰的 400。
+  const ALLOWED_ROLES = new Set(["system", "user", "assistant"])
+  for (let i = 0; i < body.messages.length; i++) {
+    const m = body.messages[i] as { role?: unknown; content?: unknown }
+    if (typeof m.role !== "string" || !ALLOWED_ROLES.has(m.role)) {
+      return Response.json(
+        { error: `messages[${i}].role must be 'system' | 'user' | 'assistant'` },
+        { status: 400 },
+      )
+    }
+    if (typeof m.content !== "string") {
+      return Response.json(
+        { error: `messages[${i}].content must be a string` },
+        { status: 400 },
+      )
+    }
+  }
 
   // 2) 构造 OpenAI 客户端。
   // baseURL 让 BYOK 真正"开放"——同一份代码能打 OpenAI / DeepSeek / Moonshot / 本地 Ollama。

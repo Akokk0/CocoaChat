@@ -15,7 +15,7 @@
 //   - useChatStream 管"什么时候做什么"（按 convId 维护 controller）
 //   - 组件管"怎么渲染"（subscribe 当前会话）
 
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { streamChat } from "@/lib/ai/streamClient"
@@ -30,6 +30,16 @@ export function useChatStream() {
   // 按 convId 维护的 controller 集合——多个会话可同时流式。
   // ref 而非 state：换它的值不需要触发重渲染；abort() 是命令式动作。
   const controllers = useRef<Map<string, AbortController>>(new Map())
+
+  // hook 卸载时（路由切换 / 热更新 / 整页面销毁）兜底 abort 所有正在跑的流——
+  // 避免后台 fetch 继续浪费用户配额，也避免 finally 里 setStreaming 在已卸载组件上调。
+  useEffect(() => {
+    const map = controllers.current
+    return () => {
+      for (const ctrl of map.values()) ctrl.abort()
+      map.clear()
+    }
+  }, [])
 
   // 流式中的会话 id 集合——派生 isStreaming 用。
   // 必须是 state（不是 ref），UI 才能在流开始/结束时重渲染发送/停止按钮。

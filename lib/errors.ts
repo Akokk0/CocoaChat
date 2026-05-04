@@ -50,6 +50,15 @@ export function explainError(err: unknown): ExplainedError {
       }
     }
 
+    // 403：权限相关。OpenAI 较少回 403，但 DeepSeek / Moonshot / Anthropic 兼容端
+    // 在"模型未开通 / 账号未实名 / 来源 IP 受限"等场景会回 403。
+    if (code === "403" || /forbidden|permission[_ ]denied|not[_ ]allowed/i.test(message)) {
+      return {
+        title: "无访问权限",
+        hint: "账号可能未开通该模型，或来源 IP / 实名认证受限。",
+      }
+    }
+
     // 429：限流 or 余额耗尽。OpenAI 用 'rate_limit_exceeded' / 'insufficient_quota' 区分。
     if (code === "429" || /rate[_ ]limit/i.test(message)) {
       return {
@@ -57,10 +66,12 @@ export function explainError(err: unknown): ExplainedError {
         hint: "稍等一会儿再试。",
       }
     }
-    if (/insufficient[_ ]quota|exceeded.*quota|billing/i.test(message)) {
+    // 余额/额度耗尽——OpenAI 用 insufficient_quota / billing；DeepSeek 用 insufficient balance。
+    // 早查更精确，因为这类错误的 status 可能是 402 / 429 / 403 各家不一。
+    if (/insufficient[_ ]?(quota|balance)|exceeded.*quota|billing|payment[_ ]required/i.test(message)) {
       return {
-        title: "额度已用完",
-        hint: "请检查账户余额或订阅状态。",
+        title: "额度或余额已用完",
+        hint: "请检查账户余额、配额或订阅状态。",
       }
     }
 

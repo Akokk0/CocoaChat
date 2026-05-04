@@ -54,7 +54,9 @@ export function ChatInput({ isStreaming, onSend, onStop }: Props) {
           // - 防止用户连点回车开第二条请求（abortRef 那边也有一道，这是双保险）
           // - 视觉提示"现在不该输入"
           disabled={isStreaming}
-          className="max-h-40 min-h-10 resize-none"
+          // min-w-0 + flex-1：让 textarea 在窄屏可压缩，不会和发送按钮一起把容器撑出视口；
+          // textarea 默认 min-width 由 cols 属性派生，flex 子项又不主动收缩，缺一会溢出。
+          className="max-h-40 min-h-10 min-w-0 flex-1 resize-none"
         />
         {isStreaming ? (
           <Button

@@ -9,7 +9,7 @@
 // fallback：highlighter 还没 ready（首次加载几百毫秒）或高亮失败时，
 // 显示纯 <pre> + 单色样式——内容立刻可读，不会闪空。
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Check, Copy } from "lucide-react"
 import { toast } from "sonner"
 
@@ -30,6 +30,9 @@ export function CodeBlock({ children, lang }: Props) {
   // 高亮后的 HTML。null = 还没好；fallback 渲染纯文本。
   const [html, setHtml] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  // 「已复制」状态自动复位的定时器——挂载时存 ref，卸载时清掉，
+  // 避免 timer fire 在已卸载组件上 setState（React 会发警告，且白白浪费一次渲染调度）。
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // children 可能末尾有个 \n（markdown 解析的副产物），高亮前去掉。
   // 不动原始 children——复制功能要给用户复制原文。
@@ -52,12 +55,24 @@ export function CodeBlock({ children, lang }: Props) {
     }
   }, [code, lang])
 
+  // 卸载时清掉「已复制」复位定时器——避免 fire 在已卸载组件上。
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
+    }
+  }, [])
+
   async function handleCopy() {
     try {
       await navigator.clipboard.writeText(code)
       setCopied(true)
       // 2s 后回到 Copy 图标——给用户视觉反馈"操作成功"。
-      setTimeout(() => setCopied(false), 2000)
+      // 上一次没复位完就再次点击：先清旧定时器，避免提前重置。
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current)
+      copiedTimerRef.current = setTimeout(() => {
+        setCopied(false)
+        copiedTimerRef.current = null
+      }, 2000)
     } catch {
       toast.error("复制失败：浏览器拒绝访问剪贴板")
     }

@@ -151,10 +151,12 @@ export function Sidebar({ onItemClick }: Props = {}) {
                     active && "bg-sidebar-accent text-sidebar-accent-foreground",
                   )}
                 >
-                  {/* 整行点击切换会话——button 包整行让点击区域大 */}
+                  {/* 整行点击切换会话——button 包整行让点击区域大。
+                      aria-current="page" 让屏幕阅读器知道这是当前选中的会话。 */}
                   <button
                     type="button"
                     onClick={() => handleSelect(c.id)}
+                    aria-current={active ? "page" : undefined}
                     className="flex flex-col gap-0.5 text-left"
                   >
                     <div className="flex items-center gap-2 truncate pr-12">

@@ -96,10 +96,32 @@ export async function* streamChat(
   }
 }
 
+// 运行时校验 unknown 是否符合 StreamEvent 形状。
+// type guard 比 `as StreamEvent` 强转更安全——前者在协议变化 / 中间代理篡改 / 服务端 bug
+// 时能立刻抛错；后者会让畸形对象冒进流式管线，引发更难排查的 NaN 累加 / undefined 访问。
+function isStreamEvent(value: unknown): value is StreamEvent {
+  if (!value || typeof value !== "object") return false
+  const ev = value as Record<string, unknown>
+  switch (ev.type) {
+    case "delta":
+      return typeof ev.content === "string"
+    case "error":
+      return (
+        typeof ev.message === "string" &&
+        (ev.code === undefined || typeof ev.code === "string")
+      )
+    case "done":
+      return ev.finishReason === undefined || typeof ev.finishReason === "string"
+    default:
+      return false
+  }
+}
+
 // 把 NDJSON 解析的失败包装成有上下文的错误，方便排查协议不一致。
 function safeParse(line: string): StreamEvent {
+  let parsed: unknown
   try {
-    return JSON.parse(line) as StreamEvent
+    parsed = JSON.parse(line)
   } catch (err) {
     throw new Error(
       `Invalid NDJSON line from /api/chat: ${line.slice(0, 80)}${
@@ -108,4 +130,13 @@ function safeParse(line: string): StreamEvent {
       { cause: err },
     )
   }
+  // JSON 合法但形状不对——同样要抛，避免静默忽略。
+  if (!isStreamEvent(parsed)) {
+    throw new Error(
+      `Unexpected event shape from /api/chat: ${line.slice(0, 80)}${
+        line.length > 80 ? "…" : ""
+      }`,
+    )
+  }
+  return parsed
 }
