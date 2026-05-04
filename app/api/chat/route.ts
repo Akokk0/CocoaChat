@@ -138,17 +138,26 @@ export async function POST(request: Request) {
           return
         }
 
-        // 上游错误：拆出 status + message 发给前端，方便区分 401（key 错）/ 429（限流）/ 5xx（上游挂）。
+        // 上游错误：拆出 message + code 发给前端，方便分支处理（401 / 429 / 5xx / 模型名错…）。
+        // OpenAI SDK 的错误对象结构：{ status: number, code?: string, message: string, type?: string }
+        // code 优先级：SDK 的 .code（'invalid_api_key' / 'rate_limit_exceeded' 这种语义明确的标签）
+        //         > .status（HTTP 状态码字符串，'401' / '429' …）
+        // 这两种 code 在 lib/errors.ts 的 explainError 里都识别——两条路都通。
         const message =
           err instanceof Error ? err.message : "Upstream request failed"
-        const status =
-          err && typeof err === "object" && "status" in err
-            ? String((err as { status: unknown }).status)
-            : undefined
+        let code: string | undefined
+        if (err && typeof err === "object") {
+          const e = err as { code?: unknown; status?: unknown }
+          if (typeof e.code === "string" && e.code.length > 0) {
+            code = e.code
+          } else if (typeof e.status === "number") {
+            code = String(e.status)
+          }
+        }
 
         try {
           controller.enqueue(
-            encodeEvent({ type: "error", message, code: status }),
+            encodeEvent({ type: "error", message, code }),
           )
           controller.close()
         } catch {

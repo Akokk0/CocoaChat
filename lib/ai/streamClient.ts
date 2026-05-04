@@ -6,6 +6,7 @@
 //     这是我们清理连接（reader.cancel）的唯一可靠时机
 //   - 天然背压：消费者处理慢，生产者就阻塞，不会爆内存
 
+import { StreamError } from "@/lib/errors"
 import type { ChatRequestBody, StreamEvent } from "@/lib/types/chat"
 
 interface StreamOptions {
@@ -35,12 +36,13 @@ export async function* streamChat(
     } catch {
       // 响应不是 JSON（比如 502 网关 HTML），保留通用消息
     }
-    throw new Error(message)
+    // HTTP 阶段错误带 status 字符串作为 code——hook 层据此分支（401/429/5xx）。
+    throw new StreamError(message, String(response.status))
   }
 
   // 理论上 fetch 对流式 GET/POST 一定有 body；多一层防御以防 polyfill / 老浏览器作妖。
   if (!response.body) {
-    throw new Error("Response has no body — streaming not supported here")
+    throw new StreamError("Response has no body — streaming not supported here")
   }
 
   const reader = response.body.getReader()

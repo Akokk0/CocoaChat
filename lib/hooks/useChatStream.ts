@@ -16,6 +16,7 @@ import { useCallback, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { streamChat } from "@/lib/ai/streamClient"
+import { explainError, StreamError } from "@/lib/errors"
 import { useChatStore } from "@/lib/store/chatStore"
 import { useSettings } from "@/lib/store/settingsStore"
 import type { ChatMessage } from "@/lib/types/chat"
@@ -94,7 +95,8 @@ export function useChatStream() {
             .getState()
             .updateAssistantContent(assistantMessage.id, event.content)
         } else if (event.type === "error") {
-          throw new Error(event.message)
+          // 把 stream 内 error event 抛成 StreamError——保留 code，让 explainError 能分支。
+          throw new StreamError(event.message, event.code)
         }
         // event.type === "done" 暂不处理；若要展示 finishReason 在这里加。
       }
@@ -105,9 +107,10 @@ export function useChatStream() {
         // 用户主动停止：不算错——保留已收到的内容。
         await finishMessage()
       } else {
-        const msg = err instanceof Error ? err.message : "未知错误"
-        setError(msg)
-        toast.error(msg)
+        // 翻译成中文友好文案：title 进 toast 主行 + state，hint 进 description。
+        const { title, hint } = explainError(err)
+        setError(title)
+        toast.error(title, hint ? { description: hint } : undefined)
         // 出错也保留半截内容（如果有）——比直接抹掉对用户更友好，能看到 AI 写到哪儿了。
         await finishMessage()
       }
