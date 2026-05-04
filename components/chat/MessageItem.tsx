@@ -94,8 +94,12 @@ export function MessageItem({
   //   - 没内容（assistant 占位）也不显示
   const showToolbar =
     !isEditing && !isStreaming && message.content.length > 0
+  // 重发按钮显示规则：
+  //   - 末尾是 assistant：经典"重新生成"
+  //   - 末尾是 user：流式失败 / 网络错让 user 消息悬空时，给一键重试入口
+  // 中间的 user / assistant 不显示重发——避免误触历史消息上下文。
   const showRegenerate =
-    showToolbar && !isUser && isLastMessage && Boolean(onRegenerate)
+    showToolbar && isLastMessage && Boolean(onRegenerate)
   const showEdit = showToolbar && isUser && Boolean(onEdit)
 
   return (
@@ -196,18 +200,14 @@ export function MessageItem({
               </div>
             ) : (
               <div className="wrap-break-word">
-                <MessageContent content={message.content} />
-                {showCursor && (
-                  <span
-                    className="ml-0.5 inline-block animate-pulse font-mono"
-                    aria-hidden
-                  >
-                    ▍
-                  </span>
-                )}
+                {/* 光标作为 MessageContent 内最后一个 block 的 ::after 伪元素，
+                    直接贴在最后一段文字末尾——比放成兄弟 span 更跟手。 */}
+                <MessageContent
+                  content={message.content}
+                  showCursor={showCursor}
+                />
               </div>
             )}
-            {/* user 也想要光标？目前只有 assistant 流式——user 不需要。 */}
           </div>
         )}
 

@@ -17,7 +17,16 @@ import {
 import type { ChatMessage } from "@/lib/types/chat"
 
 // chatStore 的角色：UI 单数据源 + IDB 的内存镜像。
-// 所有 UI 组件订阅这里；所有 IDB 写入由 actions 触发（绕开它直接 import repository 的代码就脱离了真理来源）。
+// 所有 UI 组件订阅这里；所有 IDB 写入由 actions 触发。
+//
+// Stage 6 改造（messagesByConv）：
+// 之前 messages: ChatMessage[] 只装"当前会话"的——切走会话时旧会话的流式内容
+// 没地方写、丢失。现在按会话 id 索引：messagesByConv: Record<convId, ChatMessage[]>。
+// 用户在 A 会话发问、切到 B 会话，A 的 stream 继续往 messagesByConv[A] 写；
+// 切回 A 时直接从内存看到完整内容——不需要再读 IDB，也没有"消息穿越到错的会话"问题。
+//
+// hydratedConvIds 跟踪"哪些会话的 messages 已加载到内存"——切到一个新会话时
+// 才真正去读 IDB，避免一次性把所有历史会话都加载进内存。
 
 // ---- 类型 ----
 
@@ -26,9 +35,12 @@ interface ChatState {
   conversations: ConversationRecord[]
   // 当前选中的会话 id；null = 还没选/没有任何会话。
   currentId: string | null
-  // 当前会话的消息（仅当前一个会话的——切走时整体替换）。
-  messages: ChatMessage[]
-  // hydrate 完成标志。UI 用它显示骨架屏 / 避免空列表抖动。
+  // 按会话 id 索引的内存消息缓存。只有 hydratedConvIds 里的才在这里。
+  messagesByConv: Record<string, ChatMessage[]>
+  // 哪些会话的 messages 已经从 IDB 拉进内存。
+  // 用 Set 而不是 boolean Map——批量传入更顺手，相等性判断也方便。
+  hydratedConvIds: Set<string>
+  // hydrate 完成标志（针对 conversations 列表本身，不针对单个会话的 messages）。
   isHydrated: boolean
 }
 
@@ -43,26 +55,24 @@ interface ChatActions {
   renameConversation: (id: string, title: string) => Promise<void>
 
   // ---- 消息（给 useChatStream 用） ----
-  // 返回值是新插入的 ChatMessage，hook 拿它的 id 做后续 update。
-  appendUserMessage: (conversationId: string, content: string) => Promise<ChatMessage>
-  // 流式开始前在内存里加一条空 assistant；不写 IDB，等流结束再落盘。
+  // 所有 action 都接受 conversationId——不再依赖 currentId，让流式能在后台跨会话进行。
+  appendUserMessage: (
+    conversationId: string,
+    content: string,
+  ) => Promise<ChatMessage>
   appendAssistantPlaceholder: (conversationId: string) => ChatMessage
-  // 流式期间只更新内存，性能关键路径，纯 set。
-  updateAssistantContent: (id: string, delta: string) => void
-  // 流式结束时一次性把 assistant 内容落盘。
-  persistAssistantMessage: (conversationId: string, id: string) => Promise<void>
-  // abort/error 回退：删掉末尾那条空 assistant 占位。
-  removeLastAssistantIfEmpty: (id: string) => void
-  // 清当前会话内存（不删 IDB）——切会话/重置 UI 用。
-  clearCurrentMessages: () => void
-
-  // ---- Stage 5：编辑 / 重发 ----
-  // 删一条消息（IDB + 内存）。重发场景下用来删被替代的旧 assistant。
-  removeMessage: (id: string) => Promise<void>
-  // 截断：从 messageId（含本身）到最后所有消息全删。编辑用户消息后重发用。
-  // 为什么以 id 切而不是 createdAt 阈值：避免极端情况下同毫秒消息被错删。
-  truncateFrom: (messageId: string) => Promise<void>
-  // 改会话级 system prompt（覆盖全局默认）。空字符串视为"沿用全局"。
+  updateAssistantContent: (
+    conversationId: string,
+    id: string,
+    delta: string,
+  ) => void
+  persistAssistantMessage: (
+    conversationId: string,
+    id: string,
+  ) => Promise<void>
+  removeLastAssistantIfEmpty: (conversationId: string, id: string) => void
+  removeMessage: (conversationId: string, id: string) => Promise<void>
+  truncateFrom: (conversationId: string, messageId: string) => Promise<void>
   setConversationSystemPrompt: (
     conversationId: string,
     prompt: string,
@@ -76,8 +86,23 @@ type Store = ChatState & ChatActions
 const INITIAL: ChatState = {
   conversations: [],
   currentId: null,
-  messages: [],
+  messagesByConv: {},
+  hydratedConvIds: new Set(),
   isHydrated: false,
+}
+
+// 工具：immutable 替换某 conv 的 messages。
+function withMessages(
+  state: ChatState,
+  conversationId: string,
+  next: ChatMessage[],
+): Pick<ChatState, "messagesByConv"> {
+  return {
+    messagesByConv: {
+      ...state.messagesByConv,
+      [conversationId]: next,
+    },
+  }
 }
 
 // ---- Store ----
@@ -86,7 +111,6 @@ export const useChatStore = create<Store>()((set, get) => ({
   ...INITIAL,
 
   // 应用启动时调一次。读会话列表，若有则自动选中最新那条并加载它的消息。
-  // 这样用户重开浏览器能直接接着上次最近活跃的会话——比"必须自己点一下"友好得多。
   async hydrate() {
     if (get().isHydrated) return
     const conversations = await listConversations()
@@ -99,7 +123,8 @@ export const useChatStore = create<Store>()((set, get) => ({
     set({
       conversations,
       currentId: first.id,
-      messages,
+      messagesByConv: { [first.id]: messages },
+      hydratedConvIds: new Set([first.id]),
       isHydrated: true,
     })
   },
@@ -107,36 +132,79 @@ export const useChatStore = create<Store>()((set, get) => ({
   async createConversation() {
     const record = await repoCreateConversation({ title: "新对话" })
     set((s) => ({
-      // 新会话进列表头（updatedAt 最新）
       conversations: [record, ...s.conversations],
       currentId: record.id,
-      messages: [],
+      // 新会话内存里直接给个空数组——避免后续 append 时还要 ensure。
+      messagesByConv: { ...s.messagesByConv, [record.id]: [] },
+      hydratedConvIds: new Set([...s.hydratedConvIds, record.id]),
     }))
     return record.id
   },
 
   async selectConversation(id) {
-    if (get().currentId === id) return // 点的就是当前——避免无效 IDB 读
-    const messages = await listMessagesByConversation(id)
-    set({ currentId: id, messages })
+    if (get().currentId === id) return
+    // 立刻切 UI——messages 用上一次缓存（即使可能是空，UI 显示会从骨架/空开始）。
+    // 后台读 IDB 把 messages 填进 messagesByConv[id]——避免点击会话时的等待感。
+    set({ currentId: id })
+    if (!get().hydratedConvIds.has(id)) {
+      const messages = await listMessagesByConversation(id)
+      // 二次检查：在我们读 IDB 期间，可能 streaming 已经往这个 conv 写了 placeholder。
+      // 不要直接覆盖——把 IDB 读出的历史和已存在的内存合并（按 id 去重 + 按 createdAt 排）。
+      set((s) => {
+        const existing = s.messagesByConv[id]
+        if (!existing || existing.length === 0) {
+          return {
+            ...withMessages(s, id, messages),
+            hydratedConvIds: new Set([...s.hydratedConvIds, id]),
+          }
+        }
+        // existing 里可能有 streaming 占位，IDB 读不出来——保留它们。
+        // 简单 merge：以 id 去重，IDB 的优先（更权威），internal 的补在末尾。
+        const seen = new Set(messages.map((m) => m.id))
+        const tail = existing.filter((m) => !seen.has(m.id))
+        const merged = [...messages, ...tail]
+        return {
+          ...withMessages(s, id, merged),
+          hydratedConvIds: new Set([...s.hydratedConvIds, id]),
+        }
+      })
+    }
   },
 
   async deleteConversation(id) {
     await repoDeleteConversation(id)
     set((s) => {
       const conversations = s.conversations.filter((c) => c.id !== id)
+      // 显式构造新对象，比 destructure-and-rest 让 lint 更舒服。
+      const restMessages = { ...s.messagesByConv }
+      delete restMessages[id]
+      const newHydrated = new Set(s.hydratedConvIds)
+      newHydrated.delete(id)
+      if (s.currentId !== id) {
+        return {
+          conversations,
+          messagesByConv: restMessages,
+          hydratedConvIds: newHydrated,
+        }
+      }
       // 删的就是当前会话——挑剩下的最新一条接管，否则归零。
-      if (s.currentId !== id) return { conversations }
       const next = conversations[0]
-      return next
-        ? { conversations, currentId: next.id, messages: [] /* 异步加载在外面接 */ }
-        : { conversations, currentId: null, messages: [] }
+      return {
+        conversations,
+        messagesByConv: restMessages,
+        hydratedConvIds: newHydrated,
+        currentId: next?.id ?? null,
+      }
     })
-    // 切到新选中会话的消息（如果有）。放在 set 之外避免 setState 里 await。
+    // 切到新选中会话的消息（如果有，且未加载）。
     const after = get()
-    if (after.currentId && after.messages.length === 0) {
-      const messages = await listMessagesByConversation(after.currentId)
-      set({ messages })
+    const newCurrentId = after.currentId
+    if (newCurrentId && !after.hydratedConvIds.has(newCurrentId)) {
+      const messages = await listMessagesByConversation(newCurrentId)
+      set((s) => ({
+        ...withMessages(s, newCurrentId, messages),
+        hydratedConvIds: new Set([...s.hydratedConvIds, newCurrentId]),
+      }))
     }
   },
 
@@ -158,12 +226,11 @@ export const useChatStore = create<Store>()((set, get) => ({
       content,
     })
 
-    // 2) 标题自动生成：当前会话之前没有任何消息时，把这条 user 内容作为标题。
-    //    从内存里判断，避免再读一次 IDB。
-    const state = get()
-    const isFirstUserMessage =
-      state.currentId === conversationId &&
-      !state.messages.some((m) => m.role === "user")
+    // 2) 标题自动生成：当前会话之前没有任何 user 消息时，把这条 user 内容作为标题。
+    //    用 messagesByConv[conversationId] 判断（不再依赖 currentId）——
+    //    切走会话也照常工作。
+    const existing = get().messagesByConv[conversationId] ?? []
+    const isFirstUserMessage = !existing.some((m) => m.role === "user")
     let titlePatch: ConversationRecord | null = null
     if (isFirstUserMessage) {
       titlePatch = await repoUpdateConversation(conversationId, {
@@ -171,16 +238,17 @@ export const useChatStore = create<Store>()((set, get) => ({
       })
     }
 
-    // 3) 同步内存：messages 加上新消息；conversations 更新 updatedAt（让 Sidebar 排序刷新），
-    //    若改了标题也合并进去。
+    // 3) 同步内存：messagesByConv[convId] 加新消息；conversations 更新 updatedAt。
     set((s) => ({
-      messages: [...s.messages, message],
+      ...withMessages(s, conversationId, [
+        ...(s.messagesByConv[conversationId] ?? []),
+        message,
+      ]),
       conversations: s.conversations
         .map((c) => {
           if (c.id !== conversationId) return c
           return titlePatch ?? { ...c, updatedAt: message.createdAt }
         })
-        // 重排：刚动过的那条提到最前。
         .sort((a, b) => b.updatedAt - a.updatedAt),
     }))
     return message
@@ -193,27 +261,40 @@ export const useChatStore = create<Store>()((set, get) => ({
       content: "",
       createdAt: Date.now(),
     }
-    set((s) => {
-      // 仅在 placeholder 属于当前会话时写入 messages（防极端时序：流式中切走会话）。
-      if (s.currentId !== conversationId) return s
-      return { messages: [...s.messages, placeholder] }
-    })
+    // 注意：不再判断 currentId === conversationId。哪怕用户切走了会话，
+    // placeholder 仍然写到 messagesByConv[conversationId]——切回来能立刻看到流式内容。
+    set((s) => ({
+      ...withMessages(s, conversationId, [
+        ...(s.messagesByConv[conversationId] ?? []),
+        placeholder,
+      ]),
+    }))
     return placeholder
   },
 
-  updateAssistantContent(id, delta) {
-    // 流式热路径——避免 immer / 复杂选择器，最朴素的 map 即可。
-    set((s) => ({
-      messages: s.messages.map((m) =>
-        m.id === id ? { ...m, content: m.content + delta } : m,
-      ),
-    }))
+  updateAssistantContent(conversationId, id, delta) {
+    // 流式热路径：避免 immer / 复杂选择器，最朴素的 map 即可。
+    set((s) => {
+      const existing = s.messagesByConv[conversationId]
+      if (!existing) return s // 会话已被删——丢弃这次 update
+      return {
+        ...withMessages(
+          s,
+          conversationId,
+          existing.map((m) =>
+            m.id === id ? { ...m, content: m.content + delta } : m,
+          ),
+        ),
+      }
+    })
   },
 
   async persistAssistantMessage(conversationId, id) {
     // 从内存找出最终内容，一次写盘。
-    const message = get().messages.find((m) => m.id === id)
-    if (!message) return // 用户可能已经切走会话/删掉这条——容忍
+    const messages = get().messagesByConv[conversationId]
+    if (!messages) return // 会话已被删
+    const message = messages.find((m) => m.id === id)
+    if (!message) return // 用户可能已经删掉这条——容忍
     await putMessage(conversationId, message)
     // 顺手把会话 updatedAt 顶起来，确保流式结束后 Sidebar 排序也刷新。
     await touchConversation(conversationId)
@@ -226,44 +307,42 @@ export const useChatStore = create<Store>()((set, get) => ({
     }))
   },
 
-  removeLastAssistantIfEmpty(id) {
+  removeLastAssistantIfEmpty(conversationId, id) {
     set((s) => {
-      const last = s.messages[s.messages.length - 1]
+      const existing = s.messagesByConv[conversationId]
+      if (!existing) return s
+      const last = existing[existing.length - 1]
       if (!last || last.id !== id || last.content !== "") return s
-      return { messages: s.messages.slice(0, -1) }
+      return { ...withMessages(s, conversationId, existing.slice(0, -1)) }
     })
   },
 
-  clearCurrentMessages() {
-    set({ messages: [] })
-  },
+  // ---- Stage 5：编辑 / 重发 ----
 
-  // ---- Stage 5 ----
-
-  async removeMessage(id) {
-    // 先内存：用户立刻看到消息消失，无网络/IDB 等待感。
+  async removeMessage(conversationId, id) {
     set((s) => ({
-      messages: s.messages.filter((m) => m.id !== id),
+      ...withMessages(
+        s,
+        conversationId,
+        (s.messagesByConv[conversationId] ?? []).filter((m) => m.id !== id),
+      ),
     }))
-    // 后 IDB：失败也不回滚 UI——这个 action 只在"立即重发/重写"前调，
-    // 用户接下来要看到的就是新内容；旧内容残留在 IDB 不会被读出来。
-    // 真正的容灾交给上层（hook）的整体错误处理：流式失败时不会调到这步。
     await repoDeleteMessage(id)
   },
 
-  async truncateFrom(messageId) {
-    // 1) 在内存里定位起点。找不到就当无事发生——可能是别的 tab 改了 store 之类。
-    const state = get()
-    const idx = state.messages.findIndex((m) => m.id === messageId)
+  async truncateFrom(conversationId, messageId) {
+    const messages = get().messagesByConv[conversationId]
+    if (!messages) return
+    const idx = messages.findIndex((m) => m.id === messageId)
     if (idx < 0) return
-    // 2) 拿到要删的全部 id（含起点本身），按 ids 精确删，不依赖 createdAt 单调。
-    const toDelete = state.messages.slice(idx).map((m) => m.id)
-    set({ messages: state.messages.slice(0, idx) })
+    const toDelete = messages.slice(idx).map((m) => m.id)
+    set((s) => ({
+      ...withMessages(s, conversationId, messages.slice(0, idx)),
+    }))
     await repoDeleteMessages(toDelete)
   },
 
   async setConversationSystemPrompt(conversationId, prompt) {
-    // 空串/全空白 = 解除覆盖，落库存 undefined（让 partialize/读取时区分"未设置"）。
     const trimmed = prompt.trim()
     const updated = await repoUpdateConversation(conversationId, {
       systemPrompt: trimmed || undefined,
@@ -279,8 +358,18 @@ export const useChatStore = create<Store>()((set, get) => ({
 
 // ---- 选择器 ----
 
-// 用法：const conv = useChatStore(selectCurrentConversation)
-// 比 (s) => s.conversations.find(c => c.id === s.currentId) 这种内联函数好——
-// 内联每次渲染都是新引用，会让 Zustand 的 shallow 比较失效。
 export const selectCurrentConversation = (s: Store) =>
   s.conversations.find((c) => c.id === s.currentId) ?? null
+
+// 共享的"空 messages"常量——selector 每次返回新数组会让 zustand 的 ===
+// 比较永远失败，触发 useSyncExternalStore 报"infinite loop"。
+// 引用稳定的常量是规避方法：null currentId / 未加载会话都返回同一个。
+const EMPTY_MESSAGES: ChatMessage[] = []
+
+// 当前会话的 messages（替代旧的 s.messages）。
+// 注意：如果 currentId 切到一个还没 hydrate 的会话，返回稳定的 EMPTY_MESSAGES。
+// hydrate 完成后 selector 重新派生，列表自动出现。
+export const selectCurrentMessages = (s: Store): ChatMessage[] => {
+  if (!s.currentId) return EMPTY_MESSAGES
+  return s.messagesByConv[s.currentId] ?? EMPTY_MESSAGES
+}

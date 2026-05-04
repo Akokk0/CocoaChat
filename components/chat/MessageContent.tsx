@@ -120,13 +120,23 @@ const components: Components = {
 
 interface Props {
   content: string
+  // 流式光标——本组件用最后一个 block 的 ::after 伪元素呈现，避免兄弟 span
+  // 被块级元素挤到下一行。CSS 在 globals.css 里 (.streaming > *:last-child::after)。
+  showCursor?: boolean
 }
 
-export function MessageContent({ content }: Props) {
+export function MessageContent({ content, showCursor }: Props) {
   return (
     // text-sm 跟气泡基础字号同；leading 由各元素自管。
     // [&>*+*]:mt-2 让相邻块级元素之间均匀留白——比每个元素自管 margin 更稳。
-    <div className="text-sm [&>*+*]:mt-2">
+    // streaming 类是钩子：触发 globals.css 里的 ::after 光标规则。
+    <div
+      className={
+        showCursor
+          ? "streaming text-sm [&>*+*]:mt-2"
+          : "text-sm [&>*+*]:mt-2"
+      }
+    >
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>

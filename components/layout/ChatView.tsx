@@ -14,7 +14,7 @@ import { ConversationSystemPromptDialog } from "@/components/chat/ConversationSy
 import { MessageList } from "@/components/chat/MessageList"
 import { Button } from "@/components/ui/button"
 import { useChatStream } from "@/lib/hooks/useChatStream"
-import { useChatStore } from "@/lib/store/chatStore"
+import { selectCurrentMessages, useChatStore } from "@/lib/store/chatStore"
 import { useSettings } from "@/lib/store/settingsStore"
 import { cn } from "@/lib/utils"
 
@@ -31,7 +31,9 @@ export function ChatView({ onMenuClick }: Props = {}) {
   const [sysPromptOpen, setSysPromptOpen] = useState(false)
 
   // 字段级订阅。任何一个字段变化，本组件最少重渲染。
-  const messages = useChatStore((s) => s.messages)
+  // selectCurrentMessages 用 messagesByConv[currentId] 派生当前会话消息——
+  // 切会话时自动跟随，无需额外的同步逻辑。
+  const messages = useChatStore(selectCurrentMessages)
   const currentId = useChatStore((s) => s.currentId)
   const isHydrated = useChatStore((s) => s.isHydrated)
   // 当前会话是否设置了"会话级 system prompt"——按钮高亮用，直观告诉用户"这个会话有自己的 prompt"。

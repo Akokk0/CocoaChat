@@ -150,3 +150,27 @@ html.dark .shiki span {
   font-weight: var(--shiki-dark-font-weight) !important;
   text-decoration: var(--shiki-dark-text-decoration) !important;
 }
+
+/* 流式光标。MessageContent 渲染的 markdown 是 block 元素序列；
+   光标做成最后一个 block 的 ::after 伪元素，自然贴在该 block 的内容末尾——
+   不会被 block 后跟的兄弟 span "推到下一行"。
+   .streaming 是 MessageContent 在 showCursor=true 时挂的 hook 类。 */
+.streaming > *:last-child::after {
+  content: "▍";
+  display: inline-block;
+  margin-left: 2px;
+  vertical-align: baseline;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  color: currentColor;
+  animation: streaming-cursor-blink 1s ease-in-out infinite;
+}
+
+@keyframes streaming-cursor-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
