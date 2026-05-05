@@ -1,6 +1,6 @@
 # CocoaChat
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/Akokko/cocoachat)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/Akokk0/cocoachat)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black)
 ![React 19](https://img.shields.io/badge/React-19-149eca)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6)
@@ -30,7 +30,7 @@
 ### 本地开发
 
 ```bash
-git clone https://github.com/Akokko/cocoachat.git
+git clone https://github.com/Akokk0/cocoachat.git
 cd cocoachat
 pnpm install
 pnpm dev
