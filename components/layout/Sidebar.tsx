@@ -1,6 +1,5 @@
 "use client"
 
-import { useState } from "react"
 import {
   MessageSquarePlus,
   Settings,
@@ -13,7 +12,6 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { SettingsDialog } from "@/components/settings/SettingsDialog"
 import { useChatStore } from "@/lib/store/chatStore"
 import { cn } from "@/lib/utils"
 
@@ -36,11 +34,12 @@ function formatRelative(ts: number): string {
 interface Props {
   // drawer 模式传"关 drawer"——桌面端不传时是 no-op。
   onItemClick?: () => void
+  // SettingsDialog 渲染在 AppShell（drawer 外）——drawer 关闭时 portal unmount
+  // 不会顺带 unmount dialog，避免移动端"点设置→闪一下消失"。
+  onOpenSettings?: () => void
 }
 
-export function Sidebar({ onItemClick }: Props = {}) {
-  const [settingsOpen, setSettingsOpen] = useState(false)
-
+export function Sidebar({ onItemClick, onOpenSettings }: Props = {}) {
   const conversations = useChatStore((s) => s.conversations)
   const currentId = useChatStore((s) => s.currentId)
   const isHydrated = useChatStore((s) => s.isHydrated)
@@ -86,7 +85,7 @@ export function Sidebar({ onItemClick }: Props = {}) {
   }
 
   function handleOpenSettings() {
-    setSettingsOpen(true)
+    onOpenSettings?.()
     // dialog 打开同时关 drawer，避免两层蒙层叠加。
     onItemClick?.()
   }
@@ -199,8 +198,6 @@ export function Sidebar({ onItemClick }: Props = {}) {
         </Button>
         <ThemeToggle />
       </div>
-
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </aside>
   )
 }
