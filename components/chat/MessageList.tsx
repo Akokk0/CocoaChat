@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "framer-motion"
 
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { MessageItem } from "@/components/chat/MessageItem"
+import { useChatStore } from "@/lib/store/chatStore"
 import type { ChatMessage } from "@/lib/types/chat"
 
 interface Props {
@@ -32,23 +33,25 @@ export function MessageList({
   // 取最后一条的 content.length 是个折中：既反映流式增量，又是 O(1) 比较。
   const last = messages[messages.length - 1]
   const lastLen = last?.content.length ?? 0
-  const firstId = messages[0]?.id
 
   // 区分两种滚动语义：
-  //   - "跳转"：首次挂载、切会话、刷新——内容整批换，应该瞬时定位到底（smooth 会从上慢慢滚下来）
+  //   - "跳转"：首次挂载、切会话——内容整批换，应该瞬时定位到底（smooth 会从上慢慢滚下来）
   //   - "追加"：流式新字、新消息发进来——同一会话内增量，smooth 看起来自然
-  // 判断依据是 messages 第一条的 id：身份换了 = 跳转；不变 = 追加。
-  const prevFirstIdRef = useRef<string | undefined>(undefined)
+  // 之前用 messages[0].id 判断，但"用户在 A 流式中切到 B → 切回 A"时 firstId 没变、
+  // 只是 length 涨了，会被误判成"追加"，从中间慢慢 smooth 滚到底——体验不佳。
+  // 改用 currentId：会话身份才是真正的"跳转"信号。
+  const currentId = useChatStore((s) => s.currentId)
+  const prevConvIdRef = useRef<string | null>(null)
 
   useEffect(() => {
-    const conversationChanged = prevFirstIdRef.current !== firstId
+    const conversationChanged = prevConvIdRef.current !== currentId
     bottomRef.current?.scrollIntoView({
       // "instant" 在主流浏览器都支持；"auto" 是更老的等价回退（多数引擎也是瞬时）。
       behavior: conversationChanged ? "instant" : "smooth",
       block: "end",
     })
-    prevFirstIdRef.current = firstId
-  }, [messages.length, lastLen, firstId])
+    prevConvIdRef.current = currentId
+  }, [messages.length, lastLen, currentId])
 
   // ---- 入场动画判定 ----
   //

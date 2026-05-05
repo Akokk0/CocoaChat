@@ -42,6 +42,9 @@ export async function updateConversation(
 ): Promise<ConversationRecord | null> {
   const db = await getDB()
   // 读 → 改 → 写，全在一个 readwrite 事务里——避免两个 tab 同时改时丢数据。
+  // 注意：故意**不**动 updatedAt——updatedAt 是"最近活跃"语义，仅在 appendMessage
+  // 这种"消息层活动"里被推。改标题、设系统提示属于元数据操作，不应让会话排到列表顶部。
+  // 之前误把这里也设了 Date.now()，导致重命名后 IDB 顺序被顶起、刷新页面会话位置突变。
   const tx = db.transaction("conversations", "readwrite")
   const existing = await tx.store.get(id)
   if (!existing) {
@@ -51,7 +54,6 @@ export async function updateConversation(
   const updated: ConversationRecord = {
     ...existing,
     ...patch,
-    updatedAt: Date.now(),
   }
   await tx.store.put(updated)
   await tx.done
