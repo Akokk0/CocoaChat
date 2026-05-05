@@ -1,6 +1,4 @@
-// IndexedDB 的"业务函数层"。
-// 所有 IDB 调用集中在这里——store 那边只看到 createConversation / appendMessage 之类的语义函数。
-// 这样将来要换实现（比如同步到云端、加 LRU 缓存），改这一个文件就够了。
+// IDB 的业务函数层——store 那边只看到语义函数，将来换实现改这一处即可。
 
 import { getDB, type ConversationRecord, type MessageRecord } from "@/lib/storage/db"
 import type { ChatMessage, Role } from "@/lib/types/chat"
@@ -9,12 +7,8 @@ function newId(): string {
   return crypto.randomUUID()
 }
 
-// ---- 会话 CRUD ----
-
 export async function listConversations(): Promise<ConversationRecord[]> {
   const db = await getDB()
-  // index.getAll() 默认按 key 升序返回。我们想要"最近的在前"，所以拿到后 reverse。
-  // 数据量上千以前没必要上 cursor + 'prev'——一次性 getAll 简单且足够快。
   const rows = await db.getAllFromIndex("conversations", "byUpdatedAt")
   return rows.reverse()
 }
@@ -41,10 +35,9 @@ export async function updateConversation(
   patch: Partial<Pick<ConversationRecord, "title" | "systemPrompt">>,
 ): Promise<ConversationRecord | null> {
   const db = await getDB()
-  // 读 → 改 → 写，全在一个 readwrite 事务里——避免两个 tab 同时改时丢数据。
-  // 注意：故意**不**动 updatedAt——updatedAt 是"最近活跃"语义，仅在 appendMessage
-  // 这种"消息层活动"里被推。改标题、设系统提示属于元数据操作，不应让会话排到列表顶部。
-  // 之前误把这里也设了 Date.now()，导致重命名后 IDB 顺序被顶起、刷新页面会话位置突变。
+  // 单事务读改写——避免两 tab 同改丢数据。
+  // 故意不动 updatedAt：updatedAt 只在"消息层活动"里推；改标题/系统提示属于元数据，
+  // 不应让会话排到列表顶部（之前误设 Date.now() 导致重命名后顺序突变）。
   const tx = db.transaction("conversations", "readwrite")
   const existing = await tx.store.get(id)
   if (!existing) {
@@ -60,7 +53,7 @@ export async function updateConversation(
   return updated
 }
 
-// 仅更新活跃时间戳。新发消息时调用，让会话排到最前面。
+// 仅更新活跃时间戳，让会话排到最前面。
 export async function touchConversation(id: string): Promise<void> {
   const db = await getDB()
   const tx = db.transaction("conversations", "readwrite")
@@ -71,26 +64,20 @@ export async function touchConversation(id: string): Promise<void> {
   await tx.done
 }
 
-// 级联删除：会话 + 它名下所有消息，原子操作。
+// 级联删除：会话 + 名下所有消息，单事务原子（跨 store 必须在 transaction([...]) 一次声明）。
 export async function deleteConversation(id: string): Promise<void> {
   const db = await getDB()
-  // 关键：两个 store 写入同一个事务里，要么全成要么全失败。
-  // 事务跨 store 必须在 transaction([...]) 时一次性声明，事后不能扩。
   const tx = db.transaction(["conversations", "messages"], "readwrite")
-  // 1) 找出所有相关 message 的 key
   const msgKeys = await tx
     .objectStore("messages")
     .index("byConversation")
     .getAllKeys(id)
-  // 2) 批量删 message + 删会话本身
   await Promise.all([
     ...msgKeys.map((k) => tx.objectStore("messages").delete(k)),
     tx.objectStore("conversations").delete(id),
   ])
   await tx.done
 }
-
-// ---- 消息 CRUD ----
 
 export async function listMessagesByConversation(
   conversationId: string,
@@ -101,12 +88,10 @@ export async function listMessagesByConversation(
     "byConversation",
     conversationId,
   )
-  // index.getAll 不保证顺序——我们按 createdAt 升序排（同毫秒时按 id 兜底稳定性）。
+  // index.getAll 不保证顺序——按 createdAt 升序，同毫秒按 id 兜底稳定性。
   rows.sort((a, b) =>
     a.createdAt === b.createdAt ? a.id.localeCompare(b.id) : a.createdAt - b.createdAt,
   )
-  // 落盘字段比内存字段多一个 conversationId，显式构造内存形态。
-  // 比 destructure-and-rest 模式让 lint 更舒服，且字段意图一目了然。
   return rows.map((row) => ({
     id: row.id,
     role: row.role,
@@ -130,7 +115,7 @@ export async function appendMessage(
     createdAt: message.createdAt ?? Date.now(),
   }
   const db = await getDB()
-  // 同事务里把会话的 updatedAt 顶到当前——保证 Sidebar 排序立刻生效。
+  // 单事务写消息 + 顶 updatedAt——保证 Sidebar 排序立刻生效。
   const tx = db.transaction(["messages", "conversations"], "readwrite")
   await tx.objectStore("messages").put(record)
   const conv = await tx.objectStore("conversations").get(conversationId)
@@ -148,7 +133,6 @@ export async function appendMessage(
   }
 }
 
-// 整条覆盖一条消息（最常见用法：流式结束时把内存里拼好的 assistant 内容落盘）。
 export async function putMessage(
   conversationId: string,
   message: ChatMessage,
@@ -158,9 +142,7 @@ export async function putMessage(
   await db.put("messages", record)
 }
 
-// 单事务：写消息 + 顶起会话 updatedAt。
-// 流式 assistant 落盘时用——避免 putMessage / touchConversation 两次独立事务，
-// 中途失败会出现"消息已落盘但 conversation 时间戳未更新"的不一致。
+// 单事务写消息 + 顶 updatedAt——拆两次会出现"消息落盘但时间戳没更"的不一致。
 export async function putMessageAndTouch(
   conversationId: string,
   message: ChatMessage,
@@ -178,15 +160,13 @@ export async function putMessageAndTouch(
   await tx.done
 }
 
-// 单条删除——重发时删掉旧 assistant 占位/失败消息用。
 export async function deleteMessage(id: string): Promise<void> {
   const db = await getDB()
   await db.delete("messages", id)
 }
 
-// 批量按 id 删除——编辑/重发"截断 message 之后所有"用。
-// 比按 createdAt 阈值删更精确：上层按内存 messages 数组顺序拿到要删的 id 即可，
-// 不依赖时间戳单调（极端情况：同毫秒多条消息就会出错）。
+// 按 id 而非 createdAt 阈值：上层从内存数组拿到要删的 id，不依赖时间戳单调
+// （同毫秒多条消息会出错）。
 export async function deleteMessages(ids: string[]): Promise<void> {
   if (ids.length === 0) return
   const db = await getDB()
@@ -195,18 +175,12 @@ export async function deleteMessages(ids: string[]): Promise<void> {
   await tx.done
 }
 
-// ---- 标题自动生成 ----
-
 // 第一条 user 消息进来后调一次：截前 30 字作为会话标题。
-// 中文里 String.length 是 UTF-16 code unit 数，对 BMP 字符（含常用汉字）= 字数。
-// emoji 这种代理对会算 2，体验上略短，但不影响功能——以后真的需要再用 Intl.Segmenter。
 export function deriveTitle(firstUserContent: string): string {
   const trimmed = firstUserContent.trim().replace(/\s+/g, " ")
   if (!trimmed) return "新对话"
   return trimmed.length > 30 ? trimmed.slice(0, 30) + "…" : trimmed
 }
-
-// ---- 类型再导出（方便 store 一处 import）----
 
 export type { ConversationRecord, MessageRecord }
 export type { Role }

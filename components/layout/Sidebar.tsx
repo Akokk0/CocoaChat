@@ -1,8 +1,5 @@
 "use client"
 
-// Sidebar 是客户端组件：未来要点击切换会话、打开设置 Dialog，
-// 这些都需要交互（onClick），server component 不能挂事件。
-
 import { useState } from "react"
 import {
   MessageSquarePlus,
@@ -20,8 +17,7 @@ import { SettingsDialog } from "@/components/settings/SettingsDialog"
 import { useChatStore } from "@/lib/store/chatStore"
 import { cn } from "@/lib/utils"
 
-// 把毫秒时间戳渲染成"刚刚 / 5 分钟前 / 昨天 / MM-DD"。
-// 不用 dayjs 之类的库——一个 if-else 就够，体积小。
+// 时间戳 → "刚刚 / 5 分钟前 / 昨天 / MM-DD"。
 function formatRelative(ts: number): string {
   const diff = Date.now() - ts
   const min = 60_000
@@ -38,21 +34,17 @@ function formatRelative(ts: number): string {
 }
 
 interface Props {
-  // 移动端 drawer 模式下传"关 drawer"——用户点完会话/新建会自动关。
-  // 桌面端不传，所有 callback 默认是 no-op。
+  // drawer 模式传"关 drawer"——桌面端不传时是 no-op。
   onItemClick?: () => void
 }
 
 export function Sidebar({ onItemClick }: Props = {}) {
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  // 订阅按字段拆分：每个 useChatStore 调用只关心一个值，
-  // 任意一个不变化时这一行就不会引起重渲染。
   const conversations = useChatStore((s) => s.conversations)
   const currentId = useChatStore((s) => s.currentId)
   const isHydrated = useChatStore((s) => s.isHydrated)
 
-  // actions 是稳定引用（Zustand 保证），可以一次性解构出来用。
   const createConversation = useChatStore((s) => s.createConversation)
   const selectConversation = useChatStore((s) => s.selectConversation)
   const deleteConversation = useChatStore((s) => s.deleteConversation)
@@ -76,14 +68,12 @@ export function Sidebar({ onItemClick }: Props = {}) {
     if (!window.confirm(`删除"${title}"？该会话的所有消息会一起删除。`)) return
     try {
       await deleteConversation(id)
-      // 删除后通常用户继续操作（可能切到别的会话）——保持 drawer 开着，不主动关。
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "删除失败")
     }
   }
 
   async function handleRename(id: string, current: string) {
-    // 简单粗暴用 prompt——Stage 6 再换内联编辑。
     const next = window.prompt("重命名会话", current)
     if (next == null) return
     const trimmed = next.trim()
@@ -97,14 +87,12 @@ export function Sidebar({ onItemClick }: Props = {}) {
 
   function handleOpenSettings() {
     setSettingsOpen(true)
-    // 设置 dialog 打开后 drawer 也关掉——免得两层蒙层叠在一起。
+    // dialog 打开同时关 drawer，避免两层蒙层叠加。
     onItemClick?.()
   }
 
   return (
-    // 宽度由外层容器控制（桌面 w-64，drawer w-72）；这里 w-full 跟随父级。
     <aside className="flex h-full w-full flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      {/* 顶部：Logo + 新建对话 */}
       <div className="flex flex-col gap-3 p-3">
         <div className="flex items-center gap-2 px-2 py-1">
           <div className="flex size-7 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground text-sm font-semibold">
@@ -123,14 +111,13 @@ export function Sidebar({ onItemClick }: Props = {}) {
         </Button>
       </div>
 
-      {/* 中间：会话列表（可滚动）。min-h-0 见 MessageList 注释——同样原因。 */}
+      {/* min-h-0 必须显式给——flex 子项默认 min-height:auto 会撑破父级，ScrollArea 就不滚了。 */}
       <ScrollArea className="min-h-0 flex-1 px-2">
         <div className="flex flex-col gap-1 pb-2">
           <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
             历史会话
           </div>
 
-          {/* 三种状态：未 hydrate / 空 / 有数据 */}
           {!isHydrated ? (
             <div className="px-2 py-4 text-xs text-muted-foreground">
               加载中…
@@ -146,13 +133,10 @@ export function Sidebar({ onItemClick }: Props = {}) {
                 <div
                   key={c.id}
                   className={cn(
-                    // group 让子元素能用 group-hover: 控制显隐
                     "group relative flex flex-col gap-0.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                     active && "bg-sidebar-accent text-sidebar-accent-foreground",
                   )}
                 >
-                  {/* 整行点击切换会话——button 包整行让点击区域大。
-                      aria-current="page" 让屏幕阅读器知道这是当前选中的会话。 */}
                   <button
                     type="button"
                     onClick={() => handleSelect(c.id)}
@@ -168,7 +152,6 @@ export function Sidebar({ onItemClick }: Props = {}) {
                     </span>
                   </button>
 
-                  {/* hover 出现的两个操作按钮，绝对定位到右侧避免影响布局 */}
                   <div className="absolute right-1 top-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                     <Button
                       variant="ghost"
@@ -204,7 +187,6 @@ export function Sidebar({ onItemClick }: Props = {}) {
         </div>
       </ScrollArea>
 
-      {/* 底部：设置入口 + 主题切换 */}
       <div className="flex items-center gap-1 border-t border-sidebar-border p-2">
         <Button
           variant="ghost"

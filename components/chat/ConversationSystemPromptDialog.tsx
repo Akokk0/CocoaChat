@@ -1,10 +1,6 @@
 "use client"
 
-// 会话级 system prompt 编辑 Dialog。
-// 优先级语义：
-//   - 字段非空 → 本会话用这条 system，覆盖全局
-//   - 字段为空 → 沿用 settingsStore 里的全局 systemPrompt
-// 这两条规则在 useChatStream.runStream 里实现（`conv.systemPrompt ?? settings.systemPrompt`）。
+// 会话级 system prompt：非空覆盖全局，留空回退；规则在 useChatStream.runStream 实现。
 
 import { useState } from "react"
 
@@ -28,8 +24,7 @@ interface Props {
   conversationId: string | null
 }
 
-// 同 SettingsDialog：拆 inner 子组件 + conditional render，
-// 让 useState 的 lazy init 拿一次最新 store 值即可——避免在 effect 里 setState 触发 cascading rerender。
+// 拆 inner 子组件 + conditional render，让 useState lazy init 一次性拿最新 store 值。
 export function ConversationSystemPromptDialog({
   open,
   onOpenChange,
@@ -65,10 +60,8 @@ function PromptForm({ conversationId, onClose }: FormProps) {
   const setConversationSystemPrompt = useChatStore(
     (s) => s.setConversationSystemPrompt,
   )
-  // 全局 systemPrompt 给个对照——用户能直观看到"留空"会回退到什么。
   const globalSystemPrompt = useSettings((s) => s.systemPrompt)
 
-  // 挂载时（即 dialog 打开时）取一次该会话的当前 systemPrompt——以后由 draft 自治。
   const [draft, setDraft] = useState(() => {
     const conv = useChatStore
       .getState()
@@ -76,8 +69,6 @@ function PromptForm({ conversationId, onClose }: FormProps) {
     return conv?.systemPrompt ?? ""
   })
 
-  // 是否已经覆盖（影响"使用全局默认"按钮 disabled 状态）。
-  // 也是从 store 当下值取——和 draft 解耦：用户在编辑期间不会改变"是否已覆盖"的事实。
   const hasOverride = Boolean(
     useChatStore
       .getState()
@@ -91,7 +82,6 @@ function PromptForm({ conversationId, onClose }: FormProps) {
   }
 
   const handleClear = async () => {
-    // 清空 = 解除覆盖，回退到全局。
     await setConversationSystemPrompt(conversationId, "")
     onClose()
   }
@@ -107,7 +97,6 @@ function PromptForm({ conversationId, onClose }: FormProps) {
           className="text-sm"
         />
 
-        {/* 当字段为空时给一段提示，告诉用户"会回退到这条全局" */}
         <div className="rounded-md border border-dashed border-border p-2 text-xs text-muted-foreground">
           <div className="mb-1 font-medium">全局默认</div>
           <div className="whitespace-pre-wrap font-mono">
@@ -117,7 +106,6 @@ function PromptForm({ conversationId, onClose }: FormProps) {
       </div>
 
       <DialogFooter className="flex-row justify-between sm:justify-between">
-        {/* 左侧：清除覆盖（即清空字段并保存） */}
         <Button
           type="button"
           variant="ghost"

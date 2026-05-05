@@ -13,16 +13,13 @@ interface Props {
 }
 
 export function ChatInput({ isStreaming, onSend, onStop }: Props) {
-  // 输入值是 ChatInput 的私事——父组件只关心"用户按下了发送"。
-  // 把 input 状态留在内部，外部只通过 onSend 接收最终值，
-  // 是「容器/展示」分离里"展示"的标准姿势。
   const [input, setInput] = useState("")
 
   const handleSend = () => {
     const trimmed = input.trim()
     if (!trimmed || isStreaming) return
     onSend(trimmed)
-    setInput("") // 立即清空，让用户接着打下一条
+    setInput("")
   }
 
   return (
@@ -32,9 +29,7 @@ export function ChatInput({ isStreaming, onSend, onStop }: Props) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            // Enter 发送、Shift+Enter 换行——聊天 UI 的事实标准。
-            // IME 输入法组合期间（拼音/日文）按 Enter 是确认候选，
-            // e.nativeEvent.isComposing 在所有现代浏览器都可用，必须排除。
+            // IME 组合期（拼音/日文）按 Enter 是确认候选——必须用 isComposing 排除。
             if (
               e.key === "Enter" &&
               !e.shiftKey &&
@@ -50,12 +45,8 @@ export function ChatInput({ isStreaming, onSend, onStop }: Props) {
               : "给 CocoaChat 发消息…（Shift+Enter 换行）"
           }
           rows={1}
-          // 流式时锁住输入框：
-          // - 防止用户连点回车开第二条请求（abortRef 那边也有一道，这是双保险）
-          // - 视觉提示"现在不该输入"
           disabled={isStreaming}
-          // min-w-0 + flex-1：让 textarea 在窄屏可压缩，不会和发送按钮一起把容器撑出视口；
-          // textarea 默认 min-width 由 cols 属性派生，flex 子项又不主动收缩，缺一会溢出。
+          // min-w-0 让 flex 子项可收缩——textarea 默认 min-width 由 cols 派生，否则窄屏溢出。
           className="max-h-40 min-h-10 min-w-0 flex-1 resize-none"
         />
         {isStreaming ? (

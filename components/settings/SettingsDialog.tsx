@@ -24,9 +24,8 @@ interface Props {
   onOpenChange: (open: boolean) => void
 }
 
-// 外层只管 Dialog 挂载与否；内容拆给 SettingsForm 子组件，
-// 用 `{open && <Form />}` conditional render 让"打开 dialog 时草稿同步成最新 store 值"
-// 通过新挂载实现——比 useEffect 同步 setState 更符合 React 19 心智，也避开 lint 警告。
+// 内容用 `{open && <Form />}` conditional render——每次打开都重新挂载，
+// useState 的 lazy initializer 自然能拿到最新 store 值，省掉 effect 同步。
 export function SettingsDialog({ open, onOpenChange }: Props) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -49,10 +48,6 @@ interface FormProps {
 }
 
 function SettingsForm({ onClose }: FormProps) {
-  // useState 的 lazy initializer 只在组件挂载时跑一次。
-  // 我们在父级靠 conditional render 保证「每次 dialog 打开都是新挂载」，
-  // 所以这一次就足够拿到 hydrate 后的最新 store 值——不需要 effect 同步。
-  // 直接读 getState()（不订阅）：编辑期间 store 不会从外部被改，订阅没意义。
   const [draft, setDraft] = useState(() => {
     const s = useSettings.getState()
     return {
@@ -61,17 +56,15 @@ function SettingsForm({ onClose }: FormProps) {
       model: s.model,
       systemPrompt: s.systemPrompt,
       temperature: s.temperature,
-      // maxTokens 用 string 装——number input 空值会变 NaN，string 简单很多。
+      // maxTokens 走 string——number input 空值会变 NaN。
       maxTokens: s.maxTokens === null ? "" : String(s.maxTokens),
     }
   })
   const [showKey, setShowKey] = useState(false)
 
-  // setSettings 是 zustand 的稳定引用，订阅它不会引起重渲染。
   const setSettings = useSettings((s) => s.setSettings)
 
   const handleSave = () => {
-    // maxTokens：空串 / 非法 → null（让 provider 默认）；正整数 → 直接用。
     const mt = draft.maxTokens.trim()
     let parsedMaxTokens: number | null = null
     if (mt) {
@@ -86,10 +79,10 @@ function SettingsForm({ onClose }: FormProps) {
 
     setSettings({
       apiKey: draft.apiKey.trim(),
-      // 空字符串时回退默认，免得用户清空了 baseURL 又没补
+      // 空字符串回退默认值，避免用户清空后没补。
       baseURL: draft.baseURL.trim() || "https://api.openai.com/v1",
       model: draft.model.trim() || "gpt-4o-mini",
-      systemPrompt: draft.systemPrompt, // 不 trim——允许用户写以空格起头的 prompt
+      systemPrompt: draft.systemPrompt,
       temperature: draft.temperature,
       maxTokens: parsedMaxTokens,
     })
@@ -99,9 +92,7 @@ function SettingsForm({ onClose }: FormProps) {
 
   return (
     <>
-      {/* max-h + overflow-y：参数多了 dialog 会很高，这里给个最大高度让内部滚动 */}
       <div className="grid max-h-[70vh] gap-4 overflow-y-auto pr-1">
-        {/* API Key */}
         <div className="grid gap-1.5">
           <label htmlFor="apiKey" className="text-xs font-medium">
             API Key
@@ -135,7 +126,6 @@ function SettingsForm({ onClose }: FormProps) {
           </div>
         </div>
 
-        {/* Base URL */}
         <div className="grid gap-1.5">
           <label htmlFor="baseURL" className="text-xs font-medium">
             Base URL
@@ -155,7 +145,6 @@ function SettingsForm({ onClose }: FormProps) {
           </p>
         </div>
 
-        {/* Model */}
         <div className="grid gap-1.5">
           <label htmlFor="model" className="text-xs font-medium">
             Model
@@ -172,8 +161,6 @@ function SettingsForm({ onClose }: FormProps) {
           />
         </div>
 
-        {/* System Prompt（全局默认）。
-            单条会话可以在 ChatView header 里覆盖——本字段是"没覆盖时的兜底"。 */}
         <div className="grid gap-1.5">
           <label htmlFor="systemPrompt" className="text-xs font-medium">
             System Prompt（全局默认）
@@ -193,8 +180,6 @@ function SettingsForm({ onClose }: FormProps) {
           </p>
         </div>
 
-        {/* Temperature slider。
-            base-ui 的 Slider 用 value 数组，单 thumb 传 [num]。 */}
         <div className="grid gap-1.5">
           <div className="flex items-center justify-between">
             <label htmlFor="temperature" className="text-xs font-medium">
@@ -210,7 +195,6 @@ function SettingsForm({ onClose }: FormProps) {
             onValueChange={(v) =>
               setDraft((d) => ({
                 ...d,
-                // base-ui 的 onValueChange 对单 thumb 也回数组——取第一个。
                 temperature: Array.isArray(v) ? v[0] : v,
               }))
             }
@@ -223,8 +207,6 @@ function SettingsForm({ onClose }: FormProps) {
           </p>
         </div>
 
-        {/* Max Tokens。
-            留空 = 不传 max_tokens 给 provider，由它使用默认值。 */}
         <div className="grid gap-1.5">
           <label htmlFor="maxTokens" className="text-xs font-medium">
             Max Tokens
