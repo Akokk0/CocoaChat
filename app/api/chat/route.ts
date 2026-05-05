@@ -30,6 +30,15 @@ import type {
 // Next 16 默认 POST 不缓存，但流式场景里显式声明更稳妥。
 export const dynamic = "force-dynamic"
 
+// ---- 请求体上限 ----
+
+// BYOK 场景下"攻击我方 API"的收益对调用方为零（自己烧自己的 key），
+// 但仍然给 messages 数 + 单条 content 设个上限，让明显畸形的请求早被 400 拦下，
+// 而不是把整坨 payload 转给 SDK 等它失败。
+// 这两个值远超正常对话需求（200 轮 / 单条 100K 字），不会影响真实使用。
+const MAX_MESSAGES = 200
+const MAX_CONTENT_LEN = 100_000
+
 // ---- NDJSON 编码器 ----
 
 // 一行一个 JSON 对象，行尾 "\n"。
@@ -62,6 +71,12 @@ export async function POST(request: Request) {
       { status: 400 },
     )
   }
+  if (body.messages.length > MAX_MESSAGES) {
+    return Response.json(
+      { error: `messages too long (max ${MAX_MESSAGES})` },
+      { status: 400 },
+    )
+  }
   if (!body.model?.trim()) {
     return Response.json({ error: "Missing model" }, { status: 400 })
   }
@@ -79,6 +94,12 @@ export async function POST(request: Request) {
     if (typeof m.content !== "string") {
       return Response.json(
         { error: `messages[${i}].content must be a string` },
+        { status: 400 },
+      )
+    }
+    if (m.content.length > MAX_CONTENT_LEN) {
+      return Response.json(
+        { error: `messages[${i}].content too long (max ${MAX_CONTENT_LEN} chars)` },
         { status: 400 },
       )
     }

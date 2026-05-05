@@ -1,4 +1,4 @@
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import "./globals.css"
 import { Providers } from "@/components/providers"
@@ -42,6 +42,18 @@ export const metadata: Metadata = {
     description:
       "Bring your own key 的 AI 聊天客户端，数据完全在浏览器本地。",
   },
+}
+
+// Next 16 推荐把 viewport 从 metadata 拆出来单独导出。
+// themeColor 让移动端浏览器地址栏跟随 light/dark 主题——颜色取自 globals.css 的 --background。
+// width / initialScale 显式声明（不写 Next 也会注入默认值），但加上后行为更可预期。
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#fdfafd" },
+    { media: "(prefers-color-scheme: dark)", color: "#1a1419" },
+  ],
 }
 
 export default function RootLayout({

@@ -25,8 +25,6 @@ import { useSettings } from "@/lib/store/settingsStore"
 import type { ChatMessage } from "@/lib/types/chat"
 
 export function useChatStream() {
-  const [error, setError] = useState<string | null>(null)
-
   // 按 convId 维护的 controller 集合——多个会话可同时流式。
   // ref 而非 state：换它的值不需要触发重渲染；abort() 是命令式动作。
   const controllers = useRef<Map<string, AbortController>>(new Map())
@@ -141,7 +139,6 @@ export function useChatStream() {
           await finishMessage()
         } else {
           const { title, hint } = explainError(err)
-          setError(title)
           toast.error(title, hint ? { description: hint } : undefined)
           await finishMessage()
         }
@@ -182,7 +179,6 @@ export function useChatStream() {
         chat.currentId ?? (await chat.createConversation())
 
       if (!ensureReady(conversationId)) return
-      setError(null)
 
       // 写 user 消息（IDB + 顶 updatedAt + 必要时生成标题），完成后再发流。
       await useChatStore
@@ -200,7 +196,6 @@ export function useChatStream() {
     const conversationId = chat.currentId
     if (!conversationId) return
     if (!ensureReady(conversationId)) return
-    setError(null)
 
     const messages = chat.messagesByConv[conversationId] ?? []
     const last = messages[messages.length - 1]
@@ -221,7 +216,6 @@ export function useChatStream() {
       const conversationId = chat.currentId
       if (!conversationId) return
       if (!ensureReady(conversationId)) return
-      setError(null)
 
       const messages = chat.messagesByConv[conversationId] ?? []
       const target = messages.find((m) => m.id === messageId)
@@ -252,7 +246,6 @@ export function useChatStream() {
 
   return {
     isStreaming,
-    error,
     sendMessage,
     regenerate,
     editAndResend,
